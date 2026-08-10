@@ -6,6 +6,7 @@
 #include <QClipboard>
 #include <QEvent>
 #include <QCursor>
+#include <QFontDatabase>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -51,14 +52,144 @@ void drawStatusPill(QPainter &painter, const QRect &bounds, const QString &text)
   painter.setPen(Qt::white);
   painter.drawText(pill, Qt::AlignCenter, text);
 }
+
+void drawToolbarIcon(QPainter &painter, const QRectF &bounds, const QString &action,
+                     const QString &label, const QColor &color) {
+  if (action == QStringLiteral("size")) {
+    painter.setPen(color);
+    painter.drawText(bounds, Qt::AlignCenter, label);
+    return;
+  }
+
+  painter.save();
+  constexpr qreal iconSize = 19.0;
+  painter.translate(bounds.center().x() - iconSize / 2.0,
+                    bounds.center().y() - iconSize / 2.0);
+  painter.scale(iconSize / 24.0, iconSize / 24.0);
+  painter.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+  painter.setBrush(Qt::NoBrush);
+
+  if (action == QStringLiteral("tool-arrow")) {
+    painter.drawLine(QPointF(7, 17), QPointF(17, 7));
+    painter.drawLine(QPointF(7, 7), QPointF(17, 7));
+    painter.drawLine(QPointF(17, 7), QPointF(17, 17));
+  } else if (action == QStringLiteral("tool-marker")) {
+    painter.drawEllipse(QPointF(12, 12), 8, 8);
+    QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    font.setPixelSize(11);
+    font.setBold(true);
+    painter.setFont(font);
+    painter.drawText(QRectF(4, 4, 16, 16), Qt::AlignCenter, QStringLiteral("1"));
+  } else if (action == QStringLiteral("tool-rectangle")) {
+    painter.drawRoundedRect(QRectF(4, 4, 16, 16), 2, 2);
+  } else if (action == QStringLiteral("tool-text")) {
+    painter.drawLine(QPointF(5, 5), QPointF(19, 5));
+    painter.drawLine(QPointF(12, 5), QPointF(12, 19));
+    painter.drawLine(QPointF(9, 19), QPointF(15, 19));
+  } else if (action == QStringLiteral("ocr")) {
+    QPainterPath path;
+    path.moveTo(9, 4);
+    path.lineTo(5, 4);
+    path.lineTo(5, 8);
+    path.moveTo(15, 4);
+    path.lineTo(19, 4);
+    path.lineTo(19, 8);
+    path.moveTo(9, 20);
+    path.lineTo(5, 20);
+    path.lineTo(5, 16);
+    path.moveTo(15, 20);
+    path.lineTo(19, 20);
+    path.lineTo(19, 16);
+    path.moveTo(8, 9);
+    path.lineTo(16, 9);
+    path.moveTo(8, 13);
+    path.lineTo(16, 13);
+    path.moveTo(8, 17);
+    path.lineTo(13, 17);
+    painter.drawPath(path);
+  } else if (action == QStringLiteral("background")) {
+    painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2);
+    painter.drawEllipse(QPointF(8, 9), 1.5, 1.5);
+    QPainterPath path;
+    path.moveTo(3, 17);
+    path.lineTo(8, 12);
+    path.lineTo(11, 15);
+    path.lineTo(14, 12);
+    path.lineTo(21, 19);
+    painter.drawPath(path);
+  } else if (action == QStringLiteral("undo")) {
+    QPainterPath path;
+    path.moveTo(9, 7);
+    path.lineTo(4, 12);
+    path.lineTo(9, 17);
+    path.moveTo(5, 12);
+    path.cubicTo(8, 8, 14, 7, 18, 10);
+    path.cubicTo(20, 12, 20, 15, 19, 17);
+    painter.drawPath(path);
+  } else if (action == QStringLiteral("copy") || action == QStringLiteral("both")) {
+    painter.drawRoundedRect(QRectF(8, 8, 12, 12), 2, 2);
+    QPainterPath path;
+    path.moveTo(16, 8);
+    path.lineTo(16, 6);
+    path.quadTo(16, 4, 14, 4);
+    path.lineTo(6, 4);
+    path.quadTo(4, 4, 4, 6);
+    path.lineTo(4, 14);
+    path.quadTo(4, 16, 6, 16);
+    path.lineTo(8, 16);
+    painter.drawPath(path);
+    if (action == QStringLiteral("both")) {
+      painter.setBrush(QColor(QStringLiteral("#0a84ff")));
+      painter.setPen(QPen(Qt::white, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+      painter.drawEllipse(QPointF(18, 18), 4.5, 4.5);
+      painter.drawLine(QPointF(16, 18), QPointF(17.5, 19.5));
+      painter.drawLine(QPointF(17.5, 19.5), QPointF(20.5, 16.5));
+    }
+  } else if (action == QStringLiteral("save")) {
+    painter.drawLine(QPointF(12, 4), QPointF(12, 15));
+    painter.drawLine(QPointF(8, 11), QPointF(12, 15));
+    painter.drawLine(QPointF(12, 15), QPointF(16, 11));
+    QPainterPath tray;
+    tray.moveTo(5, 18);
+    tray.lineTo(5, 20);
+    tray.lineTo(19, 20);
+    tray.lineTo(19, 18);
+    painter.drawPath(tray);
+  } else if (action == QStringLiteral("close")) {
+    painter.drawLine(QPointF(6, 6), QPointF(18, 18));
+    painter.drawLine(QPointF(18, 6), QPointF(6, 18));
+  }
+  painter.restore();
+}
+
+void drawInstantTooltip(QPainter &painter, const QRect &bounds, const QRectF &anchor,
+                        const QString &text) {
+  if (text.isEmpty())
+    return;
+  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  font.setPixelSize(12);
+  painter.setFont(font);
+  const qreal width = painter.fontMetrics().horizontalAdvance(text) + 20;
+  const qreal height = 28;
+  qreal x = std::clamp(anchor.center().x() - width / 2.0, 8.0,
+                       std::max(8.0, bounds.width() - width - 8.0));
+  qreal y = anchor.top() - height - 7;
+  if (y < 6)
+    y = anchor.bottom() + 7;
+  const QRectF pill(x, y, width, height);
+  painter.setPen(QPen(QColor(255, 255, 255, 42), 1));
+  painter.setBrush(QColor(12, 12, 15, 248));
+  painter.drawRoundedRect(pill, 7, 7);
+  painter.setPen(Qt::white);
+  painter.drawText(pill, Qt::AlignCenter, text);
+}
 } // namespace
 
 CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
-    : QWidget(parent), capture_(std::move(capture)) {
+    : QWidget(parent), capture_(std::move(capture)), fullscreenPreview_(capture_.preview) {
   setWindowTitle(QStringLiteral("Omarchy Capture Editor"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-  setAttribute(Qt::WA_TranslucentBackground);
-  setAttribute(Qt::WA_NoSystemBackground);
+  setAttribute(Qt::WA_OpaquePaintEvent);
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
 
@@ -208,43 +339,37 @@ int CaptureEditor::windowInDirection(int current, int key) const {
 
 QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   QVector<ToolbarButton> buttons;
-  const qreal height = 34;
+  const qreal height = 36;
   const qreal gap = 4;
-  struct Definition {
-    qreal width;
-    const char *action;
-    const char *label;
-  };
-  constexpr std::array definitions{
-      Definition{58, "tool-arrow", "A Arrow"}, Definition{58, "tool-marker", "C Mark"},
-      Definition{54, "tool-rectangle", "R Rect"}, Definition{50, "tool-text", "T Text"}};
-
-  qreal total = 0;
-  for (const Definition &definition : definitions)
-    total += definition.width + gap;
-  total += 6 * (24 + gap) + 44 + gap + 44 + gap + 72 + gap + 48 + gap + 50 + gap +
-           86 + gap + 50 + gap + 32;
+  const qreal total = 4 * (36 + gap) + 6 * (24 + gap) + (42 + gap) +
+                      5 * (36 + gap) + (40 + gap) + 36;
   qreal x = (width() - total) / 2.0;
   const qreal y = std::max<qreal>(10, editImageRect().top() - height - 10);
-  auto add = [&](qreal buttonWidth, QString action, QString label = {}, QColor color = {}) {
-    buttons.push_back({QRectF(x, y, buttonWidth, height), std::move(action), std::move(label), color});
+  auto add = [&](qreal buttonWidth, QString action, QString label, QString tooltip,
+                 QColor color = {}) {
+    buttons.push_back({QRectF(x, y, buttonWidth, height), std::move(action),
+                       std::move(label), std::move(tooltip), color});
     x += buttonWidth + gap;
   };
 
-  for (const Definition &definition : definitions)
-    add(definition.width, QString::fromLatin1(definition.action),
-        QString::fromLatin1(definition.label));
-  for (int index = 0; index < 6; ++index)
+  add(36, QStringLiteral("tool-arrow"), {}, QStringLiteral("Arrow · A"));
+  add(36, QStringLiteral("tool-marker"), {}, QStringLiteral("Number marker · C"));
+  add(36, QStringLiteral("tool-rectangle"), {}, QStringLiteral("Rectangle · R"));
+  add(36, QStringLiteral("tool-text"), {}, QStringLiteral("Text · T"));
+  for (int index = 0; index < 6; ++index) {
     add(24, QStringLiteral("color-%1").arg(index), {},
+        QStringLiteral("Color · %1").arg(index + 1),
         QColor(QString::fromLatin1(kColorNames.at(static_cast<std::size_t>(index)))));
-  add(44, QStringLiteral("size"), QStringLiteral("%1px").arg(qRound(annotationSize_)));
-  add(44, QStringLiteral("ocr"), QStringLiteral("OCR"));
-  add(72, QStringLiteral("background"), QStringLiteral("Backdrop"));
-  add(48, QStringLiteral("undo"), QStringLiteral("Undo"));
-  add(50, QStringLiteral("copy"), QStringLiteral("Copy"));
-  add(86, QStringLiteral("both"), QStringLiteral("Copy+Save"));
-  add(50, QStringLiteral("save"), QStringLiteral("Save"));
-  add(32, QStringLiteral("close"), QStringLiteral("×"));
+  }
+  add(42, QStringLiteral("size"), QString::number(qRound(annotationSize_)),
+      QStringLiteral("Annotation size · Wheel"));
+  add(36, QStringLiteral("ocr"), {}, QStringLiteral("Copy text with OCR · O"));
+  add(36, QStringLiteral("background"), {}, QStringLiteral("Backdrop and shadow · B"));
+  add(36, QStringLiteral("undo"), {}, QStringLiteral("Undo · Ctrl+Z"));
+  add(36, QStringLiteral("copy"), {}, QStringLiteral("Copy · Enter"));
+  add(40, QStringLiteral("both"), {}, QStringLiteral("Copy and save · Shift+Enter"));
+  add(36, QStringLiteral("save"), {}, QStringLiteral("Save · Ctrl+S"));
+  add(36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc"));
   return buttons;
 }
 
@@ -453,6 +578,13 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   if (event->matches(QKeySequence::Undo)) {
     if (!annotations_.isEmpty())
       annotations_.removeLast();
+  } else if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
+             event->modifiers().testFlag(Qt::ShiftModifier)) {
+    finish(OutputMode::Both);
+    return;
+  } else if (event->matches(QKeySequence::Save)) {
+    finish(OutputMode::Save);
+    return;
   } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
     finish(OutputMode::Copy);
     return;
@@ -578,6 +710,12 @@ void CaptureEditor::updatePointerCursor() {
     setCursor(windowMode_ ? Qt::PointingHandCursor : Qt::CrossCursor);
     return;
   }
+  for (const ToolbarButton &button : toolbarButtons()) {
+    if (button.rect.contains(cursor_)) {
+      setCursor(Qt::PointingHandCursor);
+      return;
+    }
+  }
   if (tool_ == Tool::Marker)
     setCursor(Qt::PointingHandCursor);
   else if (tool_ == Tool::Text)
@@ -631,10 +769,8 @@ void CaptureEditor::paintSelect(QPainter &painter) {
 }
 
 void CaptureEditor::paintEdit(QPainter &painter) {
-  painter.save();
-  painter.setCompositionMode(QPainter::CompositionMode_Source);
-  painter.fillRect(rect(), Qt::transparent);
-  painter.restore();
+  painter.drawImage(rect(), fullscreenPreview_);
+  painter.fillRect(rect(), QColor(0, 0, 0, 160));
   const QRectF image = editImageRect();
   if (backgroundEnabled_) {
     const QRectF backing = image.adjusted(-22, -22, 22, 22);
@@ -682,18 +818,24 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   painter.restore();
 
   const QString currentTool = toolAction(tool_);
-  QFont buttonFont(QStringLiteral("Noto Sans"));
+  QFont buttonFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
   buttonFont.setPixelSize(11);
   buttonFont.setBold(true);
   painter.setFont(buttonFont);
-  for (const ToolbarButton &button : toolbarButtons()) {
+  const QVector<ToolbarButton> buttons = toolbarButtons();
+  const ToolbarButton *hoveredButton = nullptr;
+  for (const ToolbarButton &button : buttons) {
     const bool selected = button.action == currentTool ||
                           (button.action == QStringLiteral("background") && backgroundEnabled_) ||
                           (button.action == QStringLiteral("color-%1").arg(colorIndex_));
     const bool hovered = button.rect.contains(cursor_);
+    if (hovered)
+      hoveredButton = &button;
     painter.setPen(QPen(QColor(255, 255, 255, selected ? 64 : 26), 1));
     painter.setBrush(selected ? QColor(66, 66, 75, 250)
                               : (hovered ? QColor(48, 48, 56, 248) : QColor(34, 34, 40, 244)));
+    if (button.action == QStringLiteral("both"))
+      painter.setBrush(QColor(QStringLiteral("#0a84ff")));
     painter.drawRoundedRect(button.rect, 8, 8);
     if (button.color.isValid()) {
       const QPointF center = button.rect.center();
@@ -701,16 +843,13 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       painter.setBrush(button.color);
       painter.drawEllipse(center, 7, 7);
     } else {
-      painter.setPen(button.action == QStringLiteral("both") ? QColor(QStringLiteral("#ffffff"))
-                                                              : QColor(245, 245, 247));
-      if (button.action == QStringLiteral("both")) {
-        painter.setBrush(QColor(QStringLiteral("#0a84ff")));
-        painter.drawRoundedRect(button.rect, 8, 8);
-      }
-      painter.drawText(button.rect, Qt::AlignCenter, button.label);
+      drawToolbarIcon(painter, button.rect, button.action, button.label,
+                      QColor(245, 245, 247));
     }
   }
   drawStatusPill(painter, rect(), status_);
+  if (hoveredButton)
+    drawInstantTooltip(painter, rect(), hoveredButton->rect, hoveredButton->tooltip);
 }
 
 void CaptureEditor::paintEvent(QPaintEvent *event) {

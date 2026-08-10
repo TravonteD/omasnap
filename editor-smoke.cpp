@@ -69,8 +69,10 @@ int main(int argc, char **argv) {
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 470));
   application.processEvents();
-  const QImage transparentUi = editor.grab().toImage();
-  if (transparentUi.pixelColor(5, 5).alpha() != 0)
+  const QImage editBackdropUi = editor.grab().toImage();
+  const QColor backdropCorner = editBackdropUi.pixelColor(5, 5);
+  if (backdropCorner.alpha() != 255 || backdropCorner == QColor(Qt::black) ||
+      backdropCorner == capture.preview.pixelColor(5, 5))
     return 9;
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 250));
   QTest::mouseMove(&editor, QPoint(570, 350), 20);
@@ -84,6 +86,10 @@ int main(int argc, char **argv) {
   QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
   QTest::keyClick(&editor, Qt::Key_B);
   application.processEvents();
+  QTest::mouseMove(&editor, QPoint(91, 92), 20);
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::PointingHandCursor)
+    return 12;
   if (!editor.grab().save(outputRoot + QStringLiteral("-ui.png"), "PNG") ||
       !hoverUi.save(outputRoot + QStringLiteral("-window-hover.png"), "PNG") ||
       !keyboardWindowUi.save(outputRoot + QStringLiteral("-window-keyboard.png"), "PNG"))
@@ -102,6 +108,16 @@ int main(int argc, char **argv) {
   if (rendered.isNull() || rendered.size() != QSize(596, 396) ||
       !rendered.save(outputRoot + QStringLiteral("-render.png"), "PNG"))
     return 3;
+
+  CaptureData highDpiCapture = capture;
+  highDpiCapture.monitor.scale = 2.0;
+  highDpiCapture.monitor.pixelSize = {1600, 1200};
+  highDpiCapture.source =
+      capture.source.scaled(1500, 1125, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+  const QImage highDpiRendered =
+      renderCapture(highDpiCapture, QRectF(100, 100, 500, 300), {}, false);
+  if (highDpiRendered.size() != QSize(1000, 600))
+    return 13;
 
   if (qEnvironmentVariableIsSet("OMARCHY_CAPTURE_SMOKE_COPY")) {
     QString clipboardError;

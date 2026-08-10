@@ -36,6 +36,7 @@ private:
     QRectF rect;
     QString action;
     QString label;
+    QString tooltip;
     QColor color;
   };
 
@@ -66,6 +67,7 @@ private:
   void updatePointerCursor();
 
   CaptureData capture_;
+  QImage fullscreenPreview_;
   Phase phase_ = Phase::Select;
   Tool tool_ = Tool::Arrow;
   QRectF selection_;

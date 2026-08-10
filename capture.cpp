@@ -251,9 +251,12 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error) {
                                    .arg(geometry.y())
                                    .arg(geometry.width())
                                    .arg(geometry.height());
-  const ProcessResult grim = runProcess(QStringLiteral("grim"),
-                                        {QStringLiteral("-t"), QStringLiteral("ppm"),
-                                         QStringLiteral("-g"), grimGeometry, sourcePath}, {}, 10000);
+  const ProcessResult grim =
+      runProcess(QStringLiteral("grim"),
+                 {QStringLiteral("-t"), QStringLiteral("ppm"), QStringLiteral("-s"),
+                  QString::number(capture.monitor.scale, 'g', 8), QStringLiteral("-g"),
+                  grimGeometry, sourcePath},
+                 {}, 10000);
   freeze.terminate();
   if (!freeze.waitForFinished(300)) {
     freeze.kill();
@@ -285,9 +288,22 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   if (pixels.isEmpty())
     return {};
 
-  const QImage cropped = capture.source.copy(pixels).convertToFormat(QImage::Format_ARGB32_Premultiplied);
-  const qreal scaleX = capture.source.width() / static_cast<qreal>(capture.preview.width());
-  const qreal scaleY = capture.source.height() / static_cast<qreal>(capture.preview.height());
+  QImage cropped =
+      capture.source.copy(pixels).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  const qreal sourceScaleX =
+      capture.source.width() / static_cast<qreal>(capture.preview.width());
+  const qreal sourceScaleY =
+      capture.source.height() / static_cast<qreal>(capture.preview.height());
+  const bool highDpi = capture.monitor.scale > 1.0;
+  const qreal scaleX = highDpi ? capture.monitor.scale : sourceScaleX;
+  const qreal scaleY = highDpi ? capture.monitor.scale : sourceScaleY;
+  if (highDpi) {
+    const QSize impliedSize(std::max(1, qRound(selection.width() * scaleX)),
+                            std::max(1, qRound(selection.height() * scaleY)));
+    if (cropped.size() != impliedSize) {
+      cropped = cropped.scaled(impliedSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+  }
   const int marginX = backgroundEnabled ? static_cast<int>(std::round(48.0 * scaleX)) : 0;
   const int marginY = backgroundEnabled ? static_cast<int>(std::round(48.0 * scaleY)) : 0;
   QImage output(cropped.width() + marginX * 2, cropped.height() + marginY * 2,

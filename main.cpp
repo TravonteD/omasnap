@@ -46,9 +46,7 @@ int main(int argc, char **argv) {
   }
 
   CaptureEditor editor(std::move(capture));
-  editor.winId();
-  if (editor.windowHandle())
-    editor.windowHandle()->setScreen(targetScreen);
+  editor.setScreen(targetScreen);
   editor.setGeometry(targetScreen->geometry());
   editor.showFullScreen();
   editor.raise();
