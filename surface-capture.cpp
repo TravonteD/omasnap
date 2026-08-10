@@ -71,7 +71,8 @@ void handleClosed(void *, ext_foreign_toplevel_handle_v1 *) {}
 void handleDone(void *, ext_foreign_toplevel_handle_v1 *) {}
 void handleTitle(void *, ext_foreign_toplevel_handle_v1 *, const char *) {}
 void handleAppId(void *, ext_foreign_toplevel_handle_v1 *, const char *) {}
-void handleIdentifier(void *data, ext_foreign_toplevel_handle_v1 *, const char *identifier) {
+void handleIdentifier(void *data, ext_foreign_toplevel_handle_v1 *,
+                      const char *identifier) {
   static_cast<Toplevel *>(data)->identifier = identifier ? identifier : "";
 }
 
@@ -83,49 +84,65 @@ void listToplevel(void *data, ext_foreign_toplevel_list_v1 *,
   auto &state = *static_cast<CaptureState *>(data);
   auto toplevel = std::make_unique<Toplevel>();
   toplevel->handle = handle;
-  ext_foreign_toplevel_handle_v1_add_listener(handle, &kHandleListener, toplevel.get());
+  ext_foreign_toplevel_handle_v1_add_listener(handle, &kHandleListener,
+                                              toplevel.get());
   state.toplevels.push_back(std::move(toplevel));
 }
 void listFinished(void *, ext_foreign_toplevel_list_v1 *) {}
-constexpr ext_foreign_toplevel_list_v1_listener kListListener{listToplevel, listFinished};
+constexpr ext_foreign_toplevel_list_v1_listener kListListener{listToplevel,
+                                                              listFinished};
 
-void registryGlobal(void *data, wl_registry *registry, uint32_t name, const char *interface,
-                    uint32_t version) {
+void registryGlobal(void *data, wl_registry *registry, uint32_t name,
+                    const char *interface, uint32_t version) {
   auto &state = *static_cast<CaptureState *>(data);
   if (std::strcmp(interface, wl_shm_interface.name) == 0) {
-    state.shm = static_cast<wl_shm *>(
-        wl_registry_bind(registry, name, &wl_shm_interface, std::min(version, 1U)));
-  } else if (std::strcmp(interface, ext_foreign_toplevel_list_v1_interface.name) == 0) {
-    state.toplevelList = static_cast<ext_foreign_toplevel_list_v1 *>(wl_registry_bind(
-        registry, name, &ext_foreign_toplevel_list_v1_interface, std::min(version, 1U)));
-    ext_foreign_toplevel_list_v1_add_listener(state.toplevelList, &kListListener, &state);
+    state.shm = static_cast<wl_shm *>(wl_registry_bind(
+        registry, name, &wl_shm_interface, std::min(version, 1U)));
+  } else if (std::strcmp(interface,
+                         ext_foreign_toplevel_list_v1_interface.name) == 0) {
+    state.toplevelList =
+        static_cast<ext_foreign_toplevel_list_v1 *>(wl_registry_bind(
+            registry, name, &ext_foreign_toplevel_list_v1_interface,
+            std::min(version, 1U)));
+    ext_foreign_toplevel_list_v1_add_listener(state.toplevelList,
+                                              &kListListener, &state);
   } else if (std::strcmp(
                  interface,
-                 ext_foreign_toplevel_image_capture_source_manager_v1_interface.name) == 0) {
+                 ext_foreign_toplevel_image_capture_source_manager_v1_interface
+                     .name) == 0) {
     state.sourceManager =
-        static_cast<ext_foreign_toplevel_image_capture_source_manager_v1 *>(wl_registry_bind(
-            registry, name,
-            &ext_foreign_toplevel_image_capture_source_manager_v1_interface,
+        static_cast<ext_foreign_toplevel_image_capture_source_manager_v1 *>(
+            wl_registry_bind(
+                registry, name,
+                &ext_foreign_toplevel_image_capture_source_manager_v1_interface,
+                std::min(version, 1U)));
+  } else if (std::strcmp(interface,
+                         ext_image_copy_capture_manager_v1_interface.name) ==
+             0) {
+    state.captureManager =
+        static_cast<ext_image_copy_capture_manager_v1 *>(wl_registry_bind(
+            registry, name, &ext_image_copy_capture_manager_v1_interface,
             std::min(version, 1U)));
-  } else if (std::strcmp(interface, ext_image_copy_capture_manager_v1_interface.name) == 0) {
-    state.captureManager = static_cast<ext_image_copy_capture_manager_v1 *>(wl_registry_bind(
-        registry, name, &ext_image_copy_capture_manager_v1_interface, std::min(version, 1U)));
   }
 }
 void registryRemoved(void *, wl_registry *, uint32_t) {}
-constexpr wl_registry_listener kRegistryListener{registryGlobal, registryRemoved};
+constexpr wl_registry_listener kRegistryListener{registryGlobal,
+                                                 registryRemoved};
 
-void sessionBufferSize(void *data, ext_image_copy_capture_session_v1 *, uint32_t width,
-                       uint32_t height) {
+void sessionBufferSize(void *data, ext_image_copy_capture_session_v1 *,
+                       uint32_t width, uint32_t height) {
   auto &state = *static_cast<CaptureState *>(data);
   state.width = width;
   state.height = height;
 }
-void sessionShmFormat(void *data, ext_image_copy_capture_session_v1 *, uint32_t format) {
+void sessionShmFormat(void *data, ext_image_copy_capture_session_v1 *,
+                      uint32_t format) {
   static_cast<CaptureState *>(data)->shmFormats.push_back(format);
 }
-void sessionDmabufDevice(void *, ext_image_copy_capture_session_v1 *, wl_array *) {}
-void sessionDmabufFormat(void *, ext_image_copy_capture_session_v1 *, uint32_t, wl_array *) {}
+void sessionDmabufDevice(void *, ext_image_copy_capture_session_v1 *,
+                         wl_array *) {}
+void sessionDmabufFormat(void *, ext_image_copy_capture_session_v1 *, uint32_t,
+                         wl_array *) {}
 void sessionDone(void *data, ext_image_copy_capture_session_v1 *) {
   static_cast<CaptureState *>(data)->constraintsDone = true;
 }
@@ -136,16 +153,17 @@ void sessionStopped(void *data, ext_image_copy_capture_session_v1 *) {
   state.frameDone = true;
 }
 constexpr ext_image_copy_capture_session_v1_listener kSessionListener{
-    sessionBufferSize, sessionShmFormat, sessionDmabufDevice,
-    sessionDmabufFormat, sessionDone, sessionStopped};
+    sessionBufferSize,   sessionShmFormat, sessionDmabufDevice,
+    sessionDmabufFormat, sessionDone,      sessionStopped};
 
-void frameTransform(void *data, ext_image_copy_capture_frame_v1 *, uint32_t transform) {
+void frameTransform(void *data, ext_image_copy_capture_frame_v1 *,
+                    uint32_t transform) {
   static_cast<CaptureState *>(data)->transform = transform;
 }
-void frameDamage(void *, ext_image_copy_capture_frame_v1 *, int32_t, int32_t, int32_t,
-                 int32_t) {}
-void framePresentation(void *, ext_image_copy_capture_frame_v1 *, uint32_t, uint32_t,
-                       uint32_t) {}
+void frameDamage(void *, ext_image_copy_capture_frame_v1 *, int32_t, int32_t,
+                 int32_t, int32_t) {}
+void framePresentation(void *, ext_image_copy_capture_frame_v1 *, uint32_t,
+                       uint32_t, uint32_t) {}
 void frameReady(void *data, ext_image_copy_capture_frame_v1 *) {
   auto &state = *static_cast<CaptureState *>(data);
   state.frameReady = true;
@@ -157,8 +175,10 @@ void frameFailed(void *data, ext_image_copy_capture_frame_v1 *, uint32_t) {
 constexpr ext_image_copy_capture_frame_v1_listener kFrameListener{
     frameTransform, frameDamage, framePresentation, frameReady, frameFailed};
 
-bool dispatchUntil(CaptureState &state, const bool *done, int timeoutMs, QString &error) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+bool dispatchUntil(CaptureState &state, const bool *done, int timeoutMs,
+                   QString &error) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
   while (!*done) {
     if (wl_display_dispatch_pending(state.display) < 0) {
       error = QStringLiteral("Wayland surface capture dispatch failed");
@@ -181,19 +201,22 @@ bool dispatchUntil(CaptureState &state, const bool *done, int timeoutMs, QString
       return false;
     }
 
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-        deadline - std::chrono::steady_clock::now());
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
     if (remaining.count() <= 0) {
       wl_display_cancel_read(state.display);
       error = QStringLiteral("Wayland surface capture timed out");
       return false;
     }
     pollfd descriptor{wl_display_get_fd(state.display), POLLIN, 0};
-    const int result = poll(&descriptor, 1, static_cast<int>(remaining.count()));
+    const int result =
+        poll(&descriptor, 1, static_cast<int>(remaining.count()));
     if (result <= 0 || !(descriptor.revents & POLLIN)) {
       wl_display_cancel_read(state.display);
-      error = result == 0 ? QStringLiteral("Wayland surface capture timed out")
-                          : QStringLiteral("Wayland surface capture connection failed");
+      error = result == 0
+                  ? QStringLiteral("Wayland surface capture timed out")
+                  : QStringLiteral("Wayland surface capture connection failed");
       return false;
     }
     if (wl_display_read_events(state.display) < 0) {
@@ -209,11 +232,13 @@ bool createShmBuffer(CaptureState &state, QString &error) {
                                WL_SHM_FORMAT_ABGR8888, WL_SHM_FORMAT_XBGR8888};
   const auto format = std::ranges::find_first_of(formats, state.shmFormats);
   if (format == std::end(formats)) {
-    error = QStringLiteral("Compositor offered no supported surface capture format");
+    error = QStringLiteral(
+        "Compositor offered no supported surface capture format");
     return false;
   }
   state.format = *format;
-  if (state.width == 0 || state.height == 0 || state.width > 32768 || state.height > 32768) {
+  if (state.width == 0 || state.height == 0 || state.width > 32768 ||
+      state.height > 32768) {
     error = QStringLiteral("Compositor returned an invalid surface size");
     return false;
   }
@@ -233,21 +258,23 @@ bool createShmBuffer(CaptureState &state, QString &error) {
     error = QStringLiteral("Could not size surface capture memory");
     return false;
   }
-  state.memory =
-      mmap(nullptr, state.memorySize, PROT_READ | PROT_WRITE, MAP_SHARED, state.fd, 0);
+  state.memory = mmap(nullptr, state.memorySize, PROT_READ | PROT_WRITE,
+                      MAP_SHARED, state.fd, 0);
   if (state.memory == MAP_FAILED) {
     error = QStringLiteral("Could not map surface capture memory");
     return false;
   }
 
-  state.pool = wl_shm_create_pool(state.shm, state.fd, static_cast<int32_t>(state.memorySize));
+  state.pool = wl_shm_create_pool(state.shm, state.fd,
+                                  static_cast<int32_t>(state.memorySize));
   if (!state.pool) {
     error = QStringLiteral("Could not create Wayland surface capture pool");
     return false;
   }
-  state.buffer = wl_shm_pool_create_buffer(state.pool, 0, static_cast<int32_t>(state.width),
-                                            static_cast<int32_t>(state.height),
-                                            static_cast<int32_t>(stride), state.format);
+  state.buffer = wl_shm_pool_create_buffer(
+      state.pool, 0, static_cast<int32_t>(state.width),
+      static_cast<int32_t>(state.height), static_cast<int32_t>(stride),
+      state.format);
   if (!state.buffer) {
     error = QStringLiteral("Could not create Wayland surface capture buffer");
     return false;
@@ -274,15 +301,18 @@ QImage copyCapturedImage(const CaptureState &state) {
     return {};
   }
   const int stride = static_cast<int>(state.width * 4);
-  return QImage(static_cast<uchar *>(state.memory), static_cast<int>(state.width),
-                static_cast<int>(state.height), stride, imageFormat)
+  return QImage(static_cast<uchar *>(state.memory),
+                static_cast<int>(state.width), static_cast<int>(state.height),
+                stride, imageFormat)
       .copy();
 }
 } // namespace
 
-bool captureWindowSurface(const WindowTarget &window, QImage &image, QString &error) {
+bool captureWindowSurface(const WindowTarget &window, QImage &image,
+                          QString &error) {
   if (window.stableId.isEmpty()) {
-    error = QStringLiteral("Hyprland did not provide a stable window identifier");
+    error =
+        QStringLiteral("Hyprland did not provide a stable window identifier");
     return false;
   }
 
@@ -294,27 +324,34 @@ bool captureWindowSurface(const WindowTarget &window, QImage &image, QString &er
   }
   state.registry = wl_display_get_registry(state.display);
   wl_registry_add_listener(state.registry, &kRegistryListener, &state);
-  if (wl_display_roundtrip(state.display) < 0 || wl_display_roundtrip(state.display) < 0) {
+  if (wl_display_roundtrip(state.display) < 0 ||
+      wl_display_roundtrip(state.display) < 0) {
     error = QStringLiteral("Could not enumerate Wayland capture sources");
     return false;
   }
-  if (!state.shm || !state.toplevelList || !state.sourceManager || !state.captureManager) {
+  if (!state.shm || !state.toplevelList || !state.sourceManager ||
+      !state.captureManager) {
     error = QStringLiteral("Compositor does not expose native window capture");
     return false;
   }
 
-  const auto match = std::ranges::find_if(
-      state.toplevels, [&](const auto &toplevel) { return toplevel->identifier == window.stableId; });
+  const auto match =
+      std::ranges::find_if(state.toplevels, [&](const auto &toplevel) {
+        return toplevel->identifier == window.stableId;
+      });
   if (match == state.toplevels.end()) {
-    error = QStringLiteral("Selected window is no longer available for native capture");
+    error = QStringLiteral(
+        "Selected window is no longer available for native capture");
     return false;
   }
 
-  state.source = ext_foreign_toplevel_image_capture_source_manager_v1_create_source(
-      state.sourceManager, (*match)->handle);
+  state.source =
+      ext_foreign_toplevel_image_capture_source_manager_v1_create_source(
+          state.sourceManager, (*match)->handle);
   state.session = ext_image_copy_capture_manager_v1_create_session(
       state.captureManager, state.source, 0);
-  ext_image_copy_capture_session_v1_add_listener(state.session, &kSessionListener, &state);
+  ext_image_copy_capture_session_v1_add_listener(state.session,
+                                                 &kSessionListener, &state);
   if (!dispatchUntil(state, &state.constraintsDone, 2000, error))
     return false;
   if (state.stopped) {
@@ -325,14 +362,18 @@ bool captureWindowSurface(const WindowTarget &window, QImage &image, QString &er
     return false;
 
   state.frame = ext_image_copy_capture_session_v1_create_frame(state.session);
-  ext_image_copy_capture_frame_v1_add_listener(state.frame, &kFrameListener, &state);
+  ext_image_copy_capture_frame_v1_add_listener(state.frame, &kFrameListener,
+                                               &state);
   ext_image_copy_capture_frame_v1_attach_buffer(state.frame, state.buffer);
   ext_image_copy_capture_frame_v1_damage_buffer(
-      state.frame, 0, 0, static_cast<int32_t>(state.width), static_cast<int32_t>(state.height));
+      state.frame, 0, 0, static_cast<int32_t>(state.width),
+      static_cast<int32_t>(state.height));
   ext_image_copy_capture_frame_v1_capture(state.frame);
-  if (!dispatchUntil(state, &state.frameDone, 2000, error) || !state.frameReady) {
+  if (!dispatchUntil(state, &state.frameDone, 2000, error) ||
+      !state.frameReady) {
     if (error.isEmpty())
-      error = QStringLiteral("Compositor could not capture the selected window surface");
+      error = QStringLiteral(
+          "Compositor could not capture the selected window surface");
     return false;
   }
   if (state.transform != WL_OUTPUT_TRANSFORM_NORMAL) {

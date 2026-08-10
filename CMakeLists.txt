@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(omarchy-capture-editor LANGUAGES C CXX)
+project(omarchy-capture-editor VERSION 1.0.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
@@ -45,6 +45,9 @@ qt_add_resources(omarchy-capture-editor "capture-fonts"
 target_include_directories(omarchy-capture-editor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_features(omarchy-capture-editor PRIVATE cxx_std_23)
 target_compile_options(omarchy-capture-editor PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(omarchy-capture-editor PRIVATE
+  OMARCHY_CAPTURE_VERSION="${PROJECT_VERSION}"
+)
 target_link_libraries(omarchy-capture-editor PRIVATE
   Qt6::Concurrent
   Qt6::Core
@@ -84,4 +87,7 @@ install(TARGETS omarchy-capture-editor RUNTIME DESTINATION bin)
 install(FILES assets/OFL.txt
   DESTINATION share/licenses/omarchy-capture-editor
   RENAME Neucha-OFL.txt
+)
+install(FILES omarchy-capture-editor.desktop
+  DESTINATION share/applications
 )

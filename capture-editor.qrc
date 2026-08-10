@@ -1,5 +1,0 @@
-<RCC>
-  <qresource prefix="/fonts">
-    <file alias="Neucha.ttf">assets/Neucha.ttf</file>
-  </qresource>
-</RCC>

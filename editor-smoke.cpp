@@ -189,12 +189,18 @@ int main(int argc, char **argv) {
           outputRoot + QStringLiteral("-window-keyboard.png"), "PNG"))
     return 2;
 
-  CaptureEditor fullscreenEditor(capture);
+  CaptureEditor fullscreenEditor(capture,
+                                 CaptureEditor::CaptureMode::Fullscreen);
   fullscreenEditor.resize(800, 600);
   fullscreenEditor.show();
   application.processEvents();
-  QTest::keyClick(&fullscreenEditor, Qt::Key_A, Qt::ControlModifier);
+  CaptureEditor windowModeEditor(capture, CaptureEditor::CaptureMode::Window);
+  windowModeEditor.resize(800, 600);
+  windowModeEditor.show();
   application.processEvents();
+  if (!windowModeEditor.grab().save(
+          outputRoot + QStringLiteral("-window-mode.png"), "PNG"))
+    return 36;
 
   CaptureData nativePreviewCapture = capture;
   nativePreviewCapture.monitor.scale = 2.0;
@@ -203,11 +209,10 @@ int main(int argc, char **argv) {
   nativePreviewCapture.source.fill(QColor(QStringLiteral("#123456")));
   nativePreviewCapture.preview = QImage(800, 600, QImage::Format_RGB32);
   nativePreviewCapture.preview.fill(QColor(QStringLiteral("#ff00ff")));
-  CaptureEditor nativePreviewEditor(nativePreviewCapture);
+  CaptureEditor nativePreviewEditor(nativePreviewCapture,
+                                    CaptureEditor::CaptureMode::Fullscreen);
   nativePreviewEditor.resize(800, 600);
   nativePreviewEditor.show();
-  application.processEvents();
-  QTest::keyClick(&nativePreviewEditor, Qt::Key_A, Qt::ControlModifier);
   application.processEvents();
   const QImage nativePreviewUi = nativePreviewEditor.grab().toImage();
   if (nativePreviewUi.pixelColor(400, 300) !=

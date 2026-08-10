@@ -1,0 +1,61 @@
+name: Build Linux
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  archlinux:
+    name: Arch Linux x86_64
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+      - name: Install build and runtime dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          base-devel cmake ninja pkgconf qt6-base layer-shell-qt
+          wayland wayland-protocols tesseract tesseract-data-eng
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure release build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile
+        run: cmake --build build --parallel
+
+      - name: Run interaction smoke
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./build/omarchy-capture-editor-smoke /tmp/omarchy-capture-editor-smoke
+
+      - name: Stage installation
+        run: cmake --install build --prefix "$PWD/stage/usr"
+
+      - name: Package Linux artifact
+        run: |
+          version="$(QT_QPA_PLATFORM=offscreen ./build/omarchy-capture-editor --version | cut -d' ' -f2)"
+          archive="omarchy-capture-editor-${version}-archlinux-x86_64.tar.gz"
+          echo "CAPTURE_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "CAPTURE_ARTIFACT=${archive%.tar.gz}" >> "$GITHUB_ENV"
+          tar -C stage -czf "$archive" .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CAPTURE_ARTIFACT }}
+          path: ${{ env.CAPTURE_ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Attach artifact to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.CAPTURE_ARCHIVE }}

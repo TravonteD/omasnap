@@ -4,9 +4,9 @@
 #include <QBuffer>
 #include <QClipboard>
 #include <QDateTime>
-#include <QFontDatabase>
 #include <QDir>
 #include <QFile>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -65,17 +65,20 @@ ProcessResult runProcess(const QString &program, const QStringList &arguments,
 }
 
 QString runtimePath(const QString &name) {
-  QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+  QString runtime =
+      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
   if (runtime.isEmpty())
     runtime = QDir::tempPath();
   return QDir(runtime).filePath(name);
 }
 
-bool parseMonitor(const QByteArray &json, MonitorInfo &monitor, QString &error) {
+bool parseMonitor(const QByteArray &json, MonitorInfo &monitor,
+                  QString &error) {
   QJsonParseError parseError;
   const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
   if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
-    error = QStringLiteral("Could not parse Hyprland monitors: %1").arg(parseError.errorString());
+    error = QStringLiteral("Could not parse Hyprland monitors: %1")
+                .arg(parseError.errorString());
     return false;
   }
 
@@ -88,15 +91,17 @@ bool parseMonitor(const QByteArray &json, MonitorInfo &monitor, QString &error) 
     const int rawWidth = object.value(QStringLiteral("width")).toInt();
     const int rawHeight = object.value(QStringLiteral("height")).toInt();
     const int transform = object.value(QStringLiteral("transform")).toInt();
-    int logicalWidth = static_cast<int>(std::floor(rawWidth / std::max<qreal>(scale, 0.01)));
-    int logicalHeight = static_cast<int>(std::floor(rawHeight / std::max<qreal>(scale, 0.01)));
+    int logicalWidth =
+        static_cast<int>(std::floor(rawWidth / std::max<qreal>(scale, 0.01)));
+    int logicalHeight =
+        static_cast<int>(std::floor(rawHeight / std::max<qreal>(scale, 0.01)));
     if (transform == 1 || transform == 3)
       std::swap(logicalWidth, logicalHeight);
 
     monitor.name = object.value(QStringLiteral("name")).toString();
     monitor.geometry = {object.value(QStringLiteral("x")).toInt(),
-                        object.value(QStringLiteral("y")).toInt(),
-                        logicalWidth, logicalHeight};
+                        object.value(QStringLiteral("y")).toInt(), logicalWidth,
+                        logicalHeight};
     monitor.pixelSize = {rawWidth, rawHeight};
     monitor.scale = scale;
     monitor.workspaceId = object.value(QStringLiteral("activeWorkspace"))
@@ -110,7 +115,8 @@ bool parseMonitor(const QByteArray &json, MonitorInfo &monitor, QString &error) 
   return false;
 }
 
-QVector<WindowTarget> parseWindows(const QByteArray &json, const MonitorInfo &monitor) {
+QVector<WindowTarget> parseWindows(const QByteArray &json,
+                                   const MonitorInfo &monitor) {
   QVector<WindowTarget> result;
   const QJsonDocument document = QJsonDocument::fromJson(json);
   if (!document.isArray())
@@ -118,8 +124,10 @@ QVector<WindowTarget> parseWindows(const QByteArray &json, const MonitorInfo &mo
 
   for (const QJsonValue value : document.array()) {
     const QJsonObject object = value.toObject();
-    if (object.value(QStringLiteral("workspace")).toObject().value(QStringLiteral("id")).toInt() !=
-        monitor.workspaceId)
+    if (object.value(QStringLiteral("workspace"))
+            .toObject()
+            .value(QStringLiteral("id"))
+            .toInt() != monitor.workspaceId)
       continue;
 
     const QJsonArray at = object.value(QStringLiteral("at")).toArray();
@@ -128,16 +136,18 @@ QVector<WindowTarget> parseWindows(const QByteArray &json, const MonitorInfo &mo
       continue;
 
     QRect rect(at.at(0).toInt() - monitor.geometry.x(),
-               at.at(1).toInt() - monitor.geometry.y(), size.at(0).toInt(), size.at(1).toInt());
+               at.at(1).toInt() - monitor.geometry.y(), size.at(0).toInt(),
+               size.at(1).toInt());
     rect = rect.intersected(QRect(QPoint(), monitor.geometry.size()));
     if (rect.isEmpty())
       continue;
 
     QString title = object.value(QStringLiteral("title")).toString();
     if (title.isEmpty())
-      title = object.value(QStringLiteral("class")).toString(QStringLiteral("window"));
-    result.push_back(
-        {rect, object.value(QStringLiteral("stableId")).toString(), std::move(title)});
+      title = object.value(QStringLiteral("class"))
+                  .toString(QStringLiteral("window"));
+    result.push_back({rect, object.value(QStringLiteral("stableId")).toString(),
+                      std::move(title)});
   }
   return result;
 }
@@ -187,7 +197,8 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
     const QPointF stemEnd = annotation.end - direction * (headLength * 0.5);
     painter.drawLine(annotation.start, stemEnd);
     QPolygonF head;
-    head << annotation.end << base + perpendicular * halfWidth << base - perpendicular * halfWidth;
+    head << annotation.end << base + perpendicular * halfWidth
+         << base - perpendicular * halfWidth;
     painter.setPen(Qt::NoPen);
     painter.drawPolygon(head);
     return;
@@ -196,16 +207,20 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   if (annotation.kind == Annotation::Kind::Marker) {
     const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
     const QRectF marker(annotation.start.x() - diameter / 2.0,
-                        annotation.start.y() - diameter / 2.0, diameter, diameter);
-    painter.setPen(QPen(Qt::white, std::max<qreal>(1.0, annotation.size * 0.35)));
+                        annotation.start.y() - diameter / 2.0, diameter,
+                        diameter);
+    painter.setPen(
+        QPen(Qt::white, std::max<qreal>(1.0, annotation.size * 0.35)));
     painter.setBrush(annotation.color);
     painter.drawEllipse(marker);
     QFont font(QStringLiteral("Noto Sans"));
     font.setBold(true);
-    font.setPixelSize(static_cast<int>(std::max<qreal>(11.0, annotation.size * 3.2)));
+    font.setPixelSize(
+        static_cast<int>(std::max<qreal>(11.0, annotation.size * 3.2)));
     painter.setFont(font);
     painter.setPen(Qt::white);
-    painter.drawText(marker, Qt::AlignCenter, QString::number(annotation.number));
+    painter.drawText(marker, Qt::AlignCenter,
+                     QString::number(annotation.number));
     return;
   }
 
@@ -217,17 +232,24 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
 }
 
 QRect pixelSelection(const CaptureData &capture, const QRectF &selection) {
-  const QRectF bounded = selection.normalized().intersected(QRectF(QPointF(), capture.preview.size()));
-  const qreal scaleX = capture.source.width() / static_cast<qreal>(capture.preview.width());
-  const qreal scaleY = capture.source.height() / static_cast<qreal>(capture.preview.height());
-  const int left = std::clamp(static_cast<int>(std::floor(bounded.left() * scaleX)), 0,
-                              capture.source.width());
-  const int top = std::clamp(static_cast<int>(std::floor(bounded.top() * scaleY)), 0,
-                             capture.source.height());
-  const int right = std::clamp(static_cast<int>(std::ceil(bounded.right() * scaleX)), left,
-                               capture.source.width());
-  const int bottom = std::clamp(static_cast<int>(std::ceil(bounded.bottom() * scaleY)), top,
-                                capture.source.height());
+  const QRectF bounded = selection.normalized().intersected(
+      QRectF(QPointF(), capture.preview.size()));
+  const qreal scaleX =
+      capture.source.width() / static_cast<qreal>(capture.preview.width());
+  const qreal scaleY =
+      capture.source.height() / static_cast<qreal>(capture.preview.height());
+  const int left =
+      std::clamp(static_cast<int>(std::floor(bounded.left() * scaleX)), 0,
+                 capture.source.width());
+  const int top =
+      std::clamp(static_cast<int>(std::floor(bounded.top() * scaleY)), 0,
+                 capture.source.height());
+  const int right =
+      std::clamp(static_cast<int>(std::ceil(bounded.right() * scaleX)), left,
+                 capture.source.width());
+  const int bottom =
+      std::clamp(static_cast<int>(std::ceil(bounded.bottom() * scaleY)), top,
+                 capture.source.height());
   return QRect(QPoint(left, top), QPoint(right - 1, bottom - 1));
 }
 
@@ -280,24 +302,26 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                   QColor(QStringLiteral("#ef4444"))}};
   } else if (backgroundStyle == BackgroundStyle::Lagoon) {
     base = QColor(QStringLiteral("#071c2a"));
-    blobs = {Blob{QPointF(bounds.left() + bounds.width() * 0.12, bounds.top()),
-                  bounds.width() * 0.68, QColor(QStringLiteral("#06b6d4"))},
-             Blob{QPointF(bounds.right(), bounds.top() + bounds.height() * 0.25),
-                  bounds.width() * 0.75, QColor(QStringLiteral("#1d4ed8"))},
-             Blob{QPointF(bounds.center().x(), bounds.bottom()),
-                  bounds.width() * 0.75, QColor(QStringLiteral("#0f766e"))},
-             Blob{bounds.bottomLeft(), bounds.width() * 0.5,
-                  QColor(QStringLiteral("#22d3ee"))}};
+    blobs = {
+        Blob{QPointF(bounds.left() + bounds.width() * 0.12, bounds.top()),
+             bounds.width() * 0.68, QColor(QStringLiteral("#06b6d4"))},
+        Blob{QPointF(bounds.right(), bounds.top() + bounds.height() * 0.25),
+             bounds.width() * 0.75, QColor(QStringLiteral("#1d4ed8"))},
+        Blob{QPointF(bounds.center().x(), bounds.bottom()),
+             bounds.width() * 0.75, QColor(QStringLiteral("#0f766e"))},
+        Blob{bounds.bottomLeft(), bounds.width() * 0.5,
+             QColor(QStringLiteral("#22d3ee"))}};
   } else {
     base = QColor(QStringLiteral("#171225"));
-    blobs = {Blob{QPointF(bounds.left(), bounds.top() + bounds.height() * 0.15),
-                  bounds.width() * 0.7, QColor(QStringLiteral("#a855f7"))},
-             Blob{bounds.topRight(), bounds.width() * 0.72,
-                  QColor(QStringLiteral("#4f46e5"))},
-             Blob{bounds.bottomRight(), bounds.width() * 0.65,
-                  QColor(QStringLiteral("#db2777"))},
-             Blob{QPointF(bounds.left() + bounds.width() * 0.25, bounds.bottom()),
-                  bounds.width() * 0.62, QColor(QStringLiteral("#4338ca"))}};
+    blobs = {
+        Blob{QPointF(bounds.left(), bounds.top() + bounds.height() * 0.15),
+             bounds.width() * 0.7, QColor(QStringLiteral("#a855f7"))},
+        Blob{bounds.topRight(), bounds.width() * 0.72,
+             QColor(QStringLiteral("#4f46e5"))},
+        Blob{bounds.bottomRight(), bounds.width() * 0.65,
+             QColor(QStringLiteral("#db2777"))},
+        Blob{QPointF(bounds.left() + bounds.width() * 0.25, bounds.bottom()),
+             bounds.width() * 0.62, QColor(QStringLiteral("#4338ca"))}};
   }
 
   painter.fillRect(bounds, base);
@@ -323,9 +347,11 @@ void stopCaptureFreeze(QProcess &freeze) {
   }
 }
 
-bool captureFocusedMonitor(CaptureData &capture, QString &error, QProcess *heldFreeze) {
-  const ProcessResult monitors = runProcess(QStringLiteral("hyprctl"),
-                                            {QStringLiteral("monitors"), QStringLiteral("-j")});
+bool captureFocusedMonitor(CaptureData &capture, QString &error,
+                           QProcess *heldFreeze) {
+  const ProcessResult monitors =
+      runProcess(QStringLiteral("hyprctl"),
+                 {QStringLiteral("monitors"), QStringLiteral("-j")});
   if (!monitors.finished || monitors.exitCode != 0 ||
       !parseMonitor(monitors.output, capture.monitor, error)) {
     if (error.isEmpty())
@@ -333,7 +359,8 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error, QProcess *heldF
     return false;
   }
 
-  QTemporaryFile sourceFile(runtimePath(QStringLiteral("omarchy-capture-XXXXXX.ppm")));
+  QTemporaryFile sourceFile(
+      runtimePath(QStringLiteral("omarchy-capture-XXXXXX.ppm")));
   sourceFile.setAutoRemove(true);
   if (!sourceFile.open()) {
     error = sourceFile.errorString();
@@ -345,7 +372,8 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error, QProcess *heldF
   QProcess localFreeze;
   QProcess &freeze = heldFreeze ? *heldFreeze : localFreeze;
   freeze.setProcessChannelMode(QProcess::ForwardedErrorChannel);
-  freeze.start(QStringLiteral("hyprpicker"), {QStringLiteral("-r"), QStringLiteral("-z")});
+  freeze.start(QStringLiteral("hyprpicker"),
+               {QStringLiteral("-r"), QStringLiteral("-z")});
   freeze.waitForStarted(500);
   QThread::msleep(100);
 
@@ -355,31 +383,34 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error, QProcess *heldF
                                    .arg(geometry.y())
                                    .arg(geometry.width())
                                    .arg(geometry.height());
-  const ProcessResult grim =
-      runProcess(QStringLiteral("grim"),
-                 {QStringLiteral("-t"), QStringLiteral("ppm"), QStringLiteral("-s"),
-                  QString::number(capture.monitor.scale, 'g', 8), QStringLiteral("-g"),
-                  grimGeometry, sourcePath},
-                 {}, 10000);
+  const ProcessResult grim = runProcess(
+      QStringLiteral("grim"),
+      {QStringLiteral("-t"), QStringLiteral("ppm"), QStringLiteral("-s"),
+       QString::number(capture.monitor.scale, 'g', 8), QStringLiteral("-g"),
+       grimGeometry, sourcePath},
+      {}, 10000);
   if (!heldFreeze)
     stopCaptureFreeze(freeze);
 
-  if (!grim.finished || grim.exitCode != 0 || !capture.source.load(sourcePath)) {
+  if (!grim.finished || grim.exitCode != 0 ||
+      !capture.source.load(sourcePath)) {
     stopCaptureFreeze(freeze);
-    error = QStringLiteral("Screen capture failed: %1").arg(QString::fromUtf8(grim.error).trimmed());
+    error = QStringLiteral("Screen capture failed: %1")
+                .arg(QString::fromUtf8(grim.error).trimmed());
     return false;
   }
 
-  capture.preview = capture.source.scaled(geometry.size(), Qt::IgnoreAspectRatio,
-                                          Qt::SmoothTransformation);
+  capture.preview = capture.source.scaled(
+      geometry.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
   if (capture.preview.isNull()) {
     stopCaptureFreeze(freeze);
     error = QStringLiteral("Could not prepare screenshot preview");
     return false;
   }
 
-  const ProcessResult clients = runProcess(QStringLiteral("hyprctl"),
-                                           {QStringLiteral("clients"), QStringLiteral("-j")});
+  const ProcessResult clients =
+      runProcess(QStringLiteral("hyprctl"),
+                 {QStringLiteral("clients"), QStringLiteral("-j")});
   if (clients.finished && clients.exitCode == 0)
     capture.windows = parseWindows(clients.output, capture.monitor);
   return true;
@@ -392,8 +423,8 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   if (pixels.isEmpty())
     return {};
 
-  QImage cropped =
-      capture.source.copy(pixels).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  QImage cropped = capture.source.copy(pixels).convertToFormat(
+      QImage::Format_ARGB32_Premultiplied);
   const qreal sourceScaleX =
       capture.source.width() / static_cast<qreal>(capture.preview.width());
   const qreal sourceScaleY =
@@ -405,18 +436,22 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
     const QSize impliedSize(std::max(1, qRound(selection.width() * scaleX)),
                             std::max(1, qRound(selection.height() * scaleY)));
     if (cropped.size() != impliedSize) {
-      cropped = cropped.scaled(impliedSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+      cropped = cropped.scaled(impliedSize, Qt::IgnoreAspectRatio,
+                               Qt::SmoothTransformation);
     }
   }
   const bool hasBackground = backgroundStyle != BackgroundStyle::None;
-  const int marginX = hasBackground ? static_cast<int>(std::round(64.0 * scaleX)) : 0;
-  const int marginY = hasBackground ? static_cast<int>(std::round(64.0 * scaleY)) : 0;
+  const int marginX =
+      hasBackground ? static_cast<int>(std::round(64.0 * scaleX)) : 0;
+  const int marginY =
+      hasBackground ? static_cast<int>(std::round(64.0 * scaleY)) : 0;
   QImage output(cropped.width() + marginX * 2, cropped.height() + marginY * 2,
                 QImage::Format_ARGB32_Premultiplied);
   output.fill(Qt::transparent);
 
   QPainter painter(&output);
-  painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform |
+  painter.setRenderHints(QPainter::Antialiasing |
+                         QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);
   if (hasBackground) {
     paintCaptureBackground(painter, output.rect(), backgroundStyle);
@@ -425,18 +460,16 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
     for (int layer = 24; layer > 0; --layer) {
       const qreal spread = layer * std::max(scaleX, scaleY) * 0.85;
       painter.setBrush(QColor(0, 0, 0, 2 + (24 - layer) / 5));
-      painter.drawRoundedRect(
-          imageRect.adjusted(-spread, -spread + 14 * scaleY, spread,
-                             spread + 14 * scaleY),
-          16 * scaleX + spread, 16 * scaleY + spread);
+      painter.drawRoundedRect(imageRect.adjusted(-spread, -spread + 14 * scaleY,
+                                                 spread, spread + 14 * scaleY),
+                              16 * scaleX + spread, 16 * scaleY + spread);
     }
     for (int layer = 12; layer > 0; --layer) {
       const qreal spread = layer * std::max(scaleX, scaleY) * 0.45;
       painter.setBrush(QColor(0, 0, 0, 3 + (12 - layer)));
-      painter.drawRoundedRect(
-          imageRect.adjusted(-spread, -spread + 8 * scaleY, spread,
-                             spread + 8 * scaleY),
-          14 * scaleX + spread, 14 * scaleY + spread);
+      painter.drawRoundedRect(imageRect.adjusted(-spread, -spread + 8 * scaleY,
+                                                 spread, spread + 8 * scaleY),
+                              14 * scaleX + spread, 14 * scaleY + spread);
     }
     QPainterPath clip;
     clip.addRoundedRect(imageRect, 14 * scaleX, 14 * scaleY);
@@ -468,9 +501,9 @@ bool copyPngToClipboard(const QImage &image, QString &error) {
   QByteArray png;
   if (!encodePng(image, png, error))
     return false;
-  const ProcessResult copied = runProcess(QStringLiteral("wl-copy"),
-                                          {QStringLiteral("--type"), QStringLiteral("image/png")},
-                                          png, 5000);
+  const ProcessResult copied = runProcess(
+      QStringLiteral("wl-copy"),
+      {QStringLiteral("--type"), QStringLiteral("image/png")}, png, 5000);
   if (!copied.finished || copied.exitCode != 0) {
     error = QStringLiteral("Could not persist image clipboard: %1")
                 .arg(QString::fromUtf8(copied.error).trimmed());
@@ -482,18 +515,22 @@ bool copyPngToClipboard(const QImage &image, QString &error) {
 QString saveScreenshot(const QImage &image, QString &error) {
   QString root = qEnvironmentVariable("OMARCHY_SCREENSHOT_DIR");
   if (root.isEmpty())
-    root = QDir(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation))
-               .filePath(QStringLiteral("Screenshots"));
+    root =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation))
+            .filePath(QStringLiteral("Screenshots"));
   if (!QDir().mkpath(root)) {
-    error = QStringLiteral("Could not create screenshot directory: %1").arg(root);
+    error =
+        QStringLiteral("Could not create screenshot directory: %1").arg(root);
     return {};
   }
 
   const QString stem = QStringLiteral("screenshot-%1")
-                           .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss")));
+                           .arg(QDateTime::currentDateTime().toString(
+                               QStringLiteral("yyyy-MM-dd_HH-mm-ss")));
   QString path = QDir(root).filePath(stem + QStringLiteral(".png"));
   for (int suffix = 2; QFile::exists(path); ++suffix)
-    path = QDir(root).filePath(QStringLiteral("%1-%2.png").arg(stem).arg(suffix));
+    path =
+        QDir(root).filePath(QStringLiteral("%1-%2.png").arg(stem).arg(suffix));
   if (!image.save(path, "PNG")) {
     error = QStringLiteral("Could not save screenshot: %1").arg(path);
     return {};
@@ -533,16 +570,19 @@ QString recognizeText(const QImage &image, QString &error) {
     return {};
   }
 
-  const QString languages = qEnvironmentVariable("OMARCHY_OCR_LANGS", QStringLiteral("eng"));
+  const QString languages =
+      qEnvironmentVariable("OMARCHY_OCR_LANGS", QStringLiteral("eng"));
   const ProcessResult result = runProcess(
       QStringLiteral("tesseract"),
-      {path, QStringLiteral("stdout"), QStringLiteral("--oem"), QStringLiteral("1"),
-       QStringLiteral("--psm"), QStringLiteral("6"), QStringLiteral("-l"), languages,
-       QStringLiteral("--dpi"), QStringLiteral("300"), QStringLiteral("-c"),
+      {path, QStringLiteral("stdout"), QStringLiteral("--oem"),
+       QStringLiteral("1"), QStringLiteral("--psm"), QStringLiteral("6"),
+       QStringLiteral("-l"), languages, QStringLiteral("--dpi"),
+       QStringLiteral("300"), QStringLiteral("-c"),
        QStringLiteral("preserve_interword_spaces=1")},
       {}, 30000);
   if (!result.finished || result.exitCode != 0) {
-    error = QStringLiteral("OCR failed: %1").arg(QString::fromUtf8(result.error).trimmed());
+    error = QStringLiteral("OCR failed: %1")
+                .arg(QString::fromUtf8(result.error).trimmed());
     return {};
   }
   const QString text = QString::fromUtf8(result.output).trimmed();
@@ -556,5 +596,6 @@ void sendCaptureNotification(const QString &message, const QString &imagePath) {
                         QStringLiteral("-t"), QStringLiteral("2200")};
   if (!imagePath.isEmpty())
     arguments << QStringLiteral("--image") << imagePath;
-  QProcess::startDetached(QStringLiteral("omarchy-notification-send"), arguments);
+  QProcess::startDetached(QStringLiteral("omarchy-notification-send"),
+                          arguments);
 }

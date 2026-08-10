@@ -288,7 +288,8 @@ QString backgroundName(BackgroundStyle style) {
 }
 } // namespace
 
-CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
+CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
+                             QWidget *parent)
     : QWidget(parent), capture_(std::move(capture)) {
   setWindowTitle(QStringLiteral("Omarchy Capture Editor"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
@@ -342,6 +343,20 @@ CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
     setStatus(QStringLiteral("OCR copied to clipboard"));
     sendCaptureNotification(QStringLiteral("Copied text from screenshot"));
   });
+
+  if (mode == CaptureMode::Fullscreen) {
+    selection_ = QRectF(QPointF(), capture_.preview.size());
+    phase_ = Phase::Edit;
+    tool_ = Tool::Select;
+    setStatus(QStringLiteral(
+        "Full screen selected · native resolution · outer handles crop"));
+  } else if (mode == CaptureMode::Window) {
+    windowMode_ = true;
+    hoveredWindow_ = windowAt(cursor_);
+    setStatus(QStringLiteral("Window mode · click or Super+Arrows then Enter · "
+                             "Space returns to area"));
+  }
+  updatePointerCursor();
 }
 
 bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {

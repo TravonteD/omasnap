@@ -15,7 +15,11 @@ class QWheelEvent;
 class QPainter;
 class CaptureEditor final : public QWidget {
 public:
-  explicit CaptureEditor(CaptureData capture, QWidget *parent = nullptr);
+  enum class CaptureMode { Region, Window, Fullscreen };
+
+  explicit CaptureEditor(CaptureData capture,
+                         CaptureMode mode = CaptureMode::Region,
+                         QWidget *parent = nullptr);
 
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
