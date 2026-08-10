@@ -6,6 +6,7 @@
 #include <QString>
 #include <QVector>
 
+class QFont;
 class QPainter;
 
 struct MonitorInfo {
@@ -18,6 +19,7 @@ struct MonitorInfo {
 
 struct WindowTarget {
   QRect rect;
+  QString stableId;
   QString title;
 };
 
@@ -40,7 +42,10 @@ struct Annotation {
   int number = 0;
 };
 
+[[nodiscard]] QFont annotationTextFont(qreal size);
 [[nodiscard]] bool captureFocusedMonitor(CaptureData &capture, QString &error);
+[[nodiscard]] bool captureWindowSurface(const WindowTarget &window, QImage &image,
+                                        QString &error);
 [[nodiscard]] QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                                    const QVector<Annotation> &annotations,
                                    bool backgroundEnabled);

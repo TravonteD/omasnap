@@ -49,12 +49,14 @@ private:
   [[nodiscard]] qreal editScale() const;
   [[nodiscard]] QPointF toAnnotationPoint(const QPointF &position) const;
   [[nodiscard]] int windowAt(const QPointF &position) const;
+  [[nodiscard]] int windowInDirection(int current, int key) const;
   [[nodiscard]] QVector<ToolbarButton> toolbarButtons() const;
   [[nodiscard]] QColor annotationColor() const;
 
   void acceptText();
   void beginText(const QPointF &point);
   void chooseWindow(int index);
+  void selectWindowInDirection(int key);
   void finish(OutputMode mode);
   void handleToolbar(const QString &action);
   void paintEdit(QPainter &painter);
@@ -81,5 +83,7 @@ private:
   QString status_ = QStringLiteral("Drag to select an area · Space selects a window");
   QLineEdit *textEditor_ = nullptr;
   QPointF textPoint_;
+  QColor textColor_;
+  qreal textSize_ = 4.0;
   QFutureWatcher<OcrResult> ocrWatcher_;
 };

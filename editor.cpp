@@ -5,6 +5,8 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QEvent>
+#include <QCursor>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -15,6 +17,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <utility>
 
@@ -54,7 +57,8 @@ CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
     : QWidget(parent), capture_(std::move(capture)) {
   setWindowTitle(QStringLiteral("Omarchy Capture Editor"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-  setAttribute(Qt::WA_OpaquePaintEvent);
+  setAttribute(Qt::WA_TranslucentBackground);
+  setAttribute(Qt::WA_NoSystemBackground);
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
 
@@ -66,15 +70,23 @@ CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
   }
   if (geometry().isEmpty())
     setGeometry(QGuiApplication::primaryScreen()->geometry());
+  cursor_ = mapFromGlobal(QCursor::pos());
 
   textEditor_ = new QLineEdit(this);
   textEditor_->hide();
-  textEditor_->setFont(QFont(QStringLiteral("Z003"), 20, QFont::Bold, true));
+  textEditor_->setFrame(false);
   textEditor_->setStyleSheet(QStringLiteral(
-      "QLineEdit { color: #202024; background: white; border: 0; border-radius: 6px;"
-      " padding: 6px 9px; selection-background-color: #0a84ff; }"));
+      "QLineEdit { color: #ff375f; background: transparent; border: none; padding: 0;"
+      " selection-background-color: #0a84ff; }"));
   textEditor_->installEventFilter(this);
-  connect(textEditor_, &QLineEdit::returnPressed, this, [this] { acceptText(); });
+  connect(textEditor_, &QLineEdit::textChanged, this, [this](const QString &text) {
+    const QFontMetrics metrics(textEditor_->font());
+    const int desiredWidth =
+        std::max(48, metrics.horizontalAdvance(text + QStringLiteral("  ")));
+    const int availableWidth =
+        std::max(48, qRound(editImageRect().right() - textEditor_->x()));
+    textEditor_->resize(std::min(desiredWidth, availableWidth), textEditor_->height());
+  });
 
   connect(&ocrWatcher_, &QFutureWatcher<OcrResult>::finished, this, [this] {
     const OcrResult result = ocrWatcher_.result();
@@ -96,6 +108,10 @@ CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
 bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
   if (watched == textEditor_ && event->type() == QEvent::KeyPress) {
     auto *key = static_cast<QKeyEvent *>(event);
+    if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+      acceptText();
+      return true;
+    }
     if (key->key() == Qt::Key_Escape) {
       textEditor_->clear();
       textEditor_->hide();
@@ -150,6 +166,46 @@ int CaptureEditor::windowAt(const QPointF &position) const {
   return -1;
 }
 
+int CaptureEditor::windowInDirection(int current, int key) const {
+  if (capture_.windows.isEmpty())
+    return -1;
+
+  const QPointF origin =
+      current >= 0 && current < capture_.windows.size()
+          ? capture_.windows.at(current).rect.center()
+          : cursor_;
+  int best = -1;
+  qreal bestScore = std::numeric_limits<qreal>::max();
+  for (int index = 0; index < capture_.windows.size(); ++index) {
+    if (index == current)
+      continue;
+    const QPointF delta = capture_.windows.at(index).rect.center() - origin;
+    qreal along = 0;
+    qreal across = 0;
+    if (key == Qt::Key_Left && delta.x() < 0) {
+      along = -delta.x();
+      across = std::abs(delta.y());
+    } else if (key == Qt::Key_Right && delta.x() > 0) {
+      along = delta.x();
+      across = std::abs(delta.y());
+    } else if (key == Qt::Key_Up && delta.y() < 0) {
+      along = -delta.y();
+      across = std::abs(delta.x());
+    } else if (key == Qt::Key_Down && delta.y() > 0) {
+      along = delta.y();
+      across = std::abs(delta.x());
+    } else {
+      continue;
+    }
+    const qreal score = along + across * 1.75;
+    if (score < bestScore) {
+      best = index;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   QVector<ToolbarButton> buttons;
   const qreal height = 34;
@@ -169,7 +225,7 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   total += 6 * (24 + gap) + 44 + gap + 44 + gap + 72 + gap + 48 + gap + 50 + gap +
            86 + gap + 50 + gap + 32;
   qreal x = (width() - total) / 2.0;
-  const qreal y = 14;
+  const qreal y = std::max<qreal>(10, editImageRect().top() - height - 10);
   auto add = [&](qreal buttonWidth, QString action, QString label = {}, QColor color = {}) {
     buttons.push_back({QRectF(x, y, buttonWidth, height), std::move(action), std::move(label), color});
     x += buttonWidth + gap;
@@ -200,19 +256,43 @@ void CaptureEditor::setStatus(QString status) {
 void CaptureEditor::chooseWindow(int index) {
   if (index < 0 || index >= capture_.windows.size())
     return;
-  selection_ = capture_.windows.at(index).rect;
+
+  const WindowTarget target = capture_.windows.at(index);
+  setStatus(QStringLiteral("Capturing clean window surface…"));
+  QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+  QImage surface;
+  QString surfaceError;
+  if (captureWindowSurface(target, surface, surfaceError)) {
+    capture_.source = surface;
+    capture_.preview =
+        surface.scaled(target.rect.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    selection_ = QRectF(QPointF(), target.rect.size());
+    setStatus(QStringLiteral("Window surface selected · annotate, OCR, copy or save"));
+  } else {
+    selection_ = target.rect;
+    setStatus(QStringLiteral("Window crop selected · %1").arg(surfaceError));
+  }
   phase_ = Phase::Edit;
   windowMode_ = false;
-  setStatus(QStringLiteral("Window selected · annotate, OCR, copy or save"));
   updatePointerCursor();
 }
 
 void CaptureEditor::beginText(const QPointF &point) {
   textPoint_ = point;
+  textColor_ = annotationColor();
+  textSize_ = annotationSize_;
   const QRectF image = editImageRect();
   const qreal scale = editScale();
   const QPointF position = image.topLeft() + point * scale;
-  textEditor_->setGeometry(qRound(position.x()), qRound(position.y()), 220, 42);
+  QFont displayFont = annotationTextFont(textSize_);
+  displayFont.setPixelSize(std::max(12, qRound(displayFont.pixelSize() * scale)));
+  textEditor_->setFont(displayFont);
+  textEditor_->setStyleSheet(
+      QStringLiteral("QLineEdit { color: %1; background: transparent; border: none; padding: 0;"
+                     " selection-background-color: #0a84ff; }")
+          .arg(textColor_.name()));
+  textEditor_->setGeometry(qRound(position.x()), qRound(position.y()), 72,
+                           QFontMetrics(displayFont).height() + 4);
   textEditor_->clear();
   textEditor_->show();
   textEditor_->raise();
@@ -224,16 +304,29 @@ void CaptureEditor::acceptText() {
   if (!text.isEmpty()) {
     Annotation annotation;
     annotation.kind = Annotation::Kind::Text;
-    annotation.start = textPoint_ + QPointF(0, 24);
+    annotation.start =
+        textPoint_ + QPointF(0, QFontMetricsF(annotationTextFont(textSize_)).ascent());
     annotation.text = text;
-    annotation.color = annotationColor();
-    annotation.size = annotationSize_;
+    annotation.color = textColor_;
+    annotation.size = textSize_;
     annotations_.push_back(std::move(annotation));
   }
   textEditor_->clear();
   textEditor_->hide();
   setFocus(Qt::OtherFocusReason);
   update();
+}
+
+void CaptureEditor::selectWindowInDirection(int key) {
+  int current = hoveredWindow_;
+  if (current < 0)
+    current = windowAt(cursor_);
+  const int next = windowInDirection(current, key);
+  if (next < 0)
+    return;
+  hoveredWindow_ = next;
+  setStatus(QStringLiteral("%1 · Super+Arrows choose · Enter captures")
+                .arg(capture_.windows.at(next).title));
 }
 
 void CaptureEditor::runOcr() {
@@ -325,12 +418,31 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     return;
   }
   if (phase_ == Phase::Select) {
+    const bool directionalKey = event->key() == Qt::Key_Left ||
+                                event->key() == Qt::Key_Right ||
+                                event->key() == Qt::Key_Up ||
+                                event->key() == Qt::Key_Down;
+    if (windowMode_ && directionalKey &&
+        event->modifiers().testFlag(Qt::MetaModifier)) {
+      selectWindowInDirection(event->key());
+      event->accept();
+      update();
+      return;
+    }
+    if (windowMode_ &&
+        (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+      chooseWindow(hoveredWindow_);
+      return;
+    }
     if (event->key() == Qt::Key_Space) {
       windowMode_ = !windowMode_;
       dragging_ = false;
       selection_ = {};
-      setStatus(windowMode_ ? QStringLiteral("Window mode · click a highlighted window · Space returns to area")
-                            : QStringLiteral("Drag to select an area · Space selects a window"));
+      hoveredWindow_ = windowMode_ ? windowAt(cursor_) : -1;
+      setStatus(
+          windowMode_
+              ? QStringLiteral("Window mode · click or Super+Arrows then Enter · Space returns to area")
+              : QStringLiteral("Drag to select an area · Space selects a window"));
       updatePointerCursor();
       return;
     }
@@ -479,6 +591,10 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   painter.fillRect(rect(), QColor(0, 0, 0, 143));
 
   if (windowMode_) {
+    if (hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()) {
+      const QRect window = capture_.windows.at(hoveredWindow_).rect;
+      painter.drawImage(window, capture_.preview, window);
+    }
     for (int index = 0; index < capture_.windows.size(); ++index) {
       const WindowTarget &window = capture_.windows.at(index);
       painter.setPen(QPen(index == hoveredWindow_ ? Qt::white : QColor(255, 255, 255, 72), 2));
@@ -515,7 +631,10 @@ void CaptureEditor::paintSelect(QPainter &painter) {
 }
 
 void CaptureEditor::paintEdit(QPainter &painter) {
-  painter.fillRect(rect(), QColor(QStringLiteral("#0d0d10")));
+  painter.save();
+  painter.setCompositionMode(QPainter::CompositionMode_Source);
+  painter.fillRect(rect(), Qt::transparent);
+  painter.restore();
   const QRectF image = editImageRect();
   if (backgroundEnabled_) {
     const QRectF backing = image.adjusted(-22, -22, 22, 22);

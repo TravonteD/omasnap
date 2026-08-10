@@ -4,6 +4,7 @@
 #include <QBuffer>
 #include <QClipboard>
 #include <QDateTime>
+#include <QFontDatabase>
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
@@ -21,6 +22,14 @@
 
 #include <algorithm>
 #include <cmath>
+
+QFont annotationTextFont(qreal size) {
+  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  font.setWeight(QFont::DemiBold);
+  font.setItalic(false);
+  font.setPixelSize(qRound(std::max<qreal>(18.0, size * 5.0)));
+  return font;
+}
 
 namespace {
 struct ProcessResult {
@@ -120,7 +129,8 @@ QVector<WindowTarget> parseWindows(const QByteArray &json, const MonitorInfo &mo
     QString title = object.value(QStringLiteral("title")).toString();
     if (title.isEmpty())
       title = object.value(QStringLiteral("class")).toString(QStringLiteral("window"));
-    result.push_back({rect, title});
+    result.push_back(
+        {rect, object.value(QStringLiteral("stableId")).toString(), std::move(title)});
   }
   return result;
 }
@@ -172,14 +182,11 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
     return;
   }
 
-  QFont font(QStringLiteral("Z003"));
-  font.setBold(true);
-  font.setItalic(true);
-  font.setPixelSize(24);
+  const QFont font = annotationTextFont(annotation.size);
   QPainterPath textPath;
   textPath.addText(annotation.start, font, annotation.text);
   painter.setBrush(annotation.color);
-  painter.setPen(QPen(Qt::white, std::max<qreal>(1.5, annotation.size * 0.45),
+  painter.setPen(QPen(QColor(0, 0, 0, 145), std::max<qreal>(1.0, annotation.size * 0.3),
                       Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   painter.drawPath(textPath);
 }

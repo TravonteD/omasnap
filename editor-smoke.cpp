@@ -3,6 +3,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDebug>
 #include <QPainter>
 #include <QtTest/QTest>
 
@@ -11,6 +12,20 @@ int main(int argc, char **argv) {
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath()).filePath(QStringLiteral("omarchy-native-smoke"));
+
+  const QString nativeStableId = qEnvironmentVariable("OMARCHY_CAPTURE_SMOKE_NATIVE_STABLE_ID");
+  if (!nativeStableId.isEmpty()) {
+    QImage nativeSurface;
+    QString nativeError;
+    if (!captureWindowSurface({{}, nativeStableId, QStringLiteral("native smoke")},
+                              nativeSurface, nativeError)) {
+      qWarning().noquote() << nativeError;
+      return 10;
+    }
+    if (!nativeSurface.save(outputRoot + QStringLiteral("-native-window.png"), "PNG"))
+      return 11;
+    return 0;
+  }
 
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -30,25 +45,48 @@ int main(int argc, char **argv) {
                      QStringLiteral("Native Qt capture editor"));
   }
   capture.preview = capture.source;
-  capture.windows = {{{80, 80, 300, 220}, QStringLiteral("first")},
-                     {{420, 120, 300, 320}, QStringLiteral("second")}};
+  capture.windows = {{{80, 80, 300, 220}, QStringLiteral("1"), QStringLiteral("first")},
+                     {{420, 120, 300, 320}, QStringLiteral("2"), QStringLiteral("second")}};
 
   CaptureEditor editor(capture);
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_Space);
+  QTest::mouseMove(&editor, QPoint(200, 160), 20);
+  application.processEvents();
+  const QImage hoverUi = editor.grab().toImage();
+  if (hoverUi.pixelColor(200, 160) != capture.preview.pixelColor(200, 160))
+    return 7;
+  QTest::keyClick(&editor, Qt::Key_Right, Qt::MetaModifier);
+  application.processEvents();
+  const QImage keyboardWindowUi = editor.grab().toImage();
+  if (keyboardWindowUi.pixelColor(500, 200) != capture.preview.pixelColor(500, 200) ||
+      keyboardWindowUi.pixelColor(200, 160) == capture.preview.pixelColor(200, 160))
+    return 8;
+  QTest::keyClick(&editor, Qt::Key_Space);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 470));
+  application.processEvents();
+  const QImage transparentUi = editor.grab().toImage();
+  if (transparentUi.pixelColor(5, 5).alpha() != 0)
+    return 9;
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 250));
   QTest::mouseMove(&editor, QPoint(570, 350), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(570, 350));
   QTest::keyClick(&editor, Qt::Key_2);
   QTest::keyClick(&editor, Qt::Key_C);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(470, 300));
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(360, 320));
+  QTest::keyClicks(QApplication::focusWidget(), QStringLiteral("Inline text"));
+  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
   QTest::keyClick(&editor, Qt::Key_B);
   application.processEvents();
-  if (!editor.grab().save(outputRoot + QStringLiteral("-ui.png"), "PNG"))
+  if (!editor.grab().save(outputRoot + QStringLiteral("-ui.png"), "PNG") ||
+      !hoverUi.save(outputRoot + QStringLiteral("-window-hover.png"), "PNG") ||
+      !keyboardWindowUi.save(outputRoot + QStringLiteral("-window-keyboard.png"), "PNG"))
     return 2;
 
   QVector<Annotation> annotations;
