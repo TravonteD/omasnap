@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(omarchy-capture-editor VERSION 1.0.2 LANGUAGES C CXX)
+project(omasnap VERSION 1.0.3 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 find_package(PkgConfig REQUIRED)
@@ -28,7 +28,7 @@ foreach(PROTOCOL_XML IN LISTS PROTOCOL_XMLS)
   list(APPEND PROTOCOL_SOURCES "${PROTOCOL_HEADER}" "${PROTOCOL_CODE}")
 endforeach()
 
-qt_add_executable(omarchy-capture-editor
+qt_add_executable(omasnap
   main.cpp
   capture.cpp
   capture.hpp
@@ -37,19 +37,19 @@ qt_add_executable(omarchy-capture-editor
   editor.cpp
   editor.hpp
 )
-qt_add_resources(omarchy-capture-editor "capture-fonts"
+qt_add_resources(omasnap "capture-fonts"
   PREFIX "/fonts"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
 )
 
-target_include_directories(omarchy-capture-editor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-target_compile_features(omarchy-capture-editor PRIVATE cxx_std_23)
-target_compile_options(omarchy-capture-editor PRIVATE -Wall -Wextra -Wpedantic)
-target_compile_definitions(omarchy-capture-editor PRIVATE
-  OMARCHY_CAPTURE_VERSION="${PROJECT_VERSION}"
+target_include_directories(omasnap PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_compile_features(omasnap PRIVATE cxx_std_23)
+target_compile_options(omasnap PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(omasnap PRIVATE
+  OMASNAP_VERSION="${PROJECT_VERSION}"
 )
-target_link_libraries(omarchy-capture-editor PRIVATE
+target_link_libraries(omasnap PRIVATE
   Qt6::Concurrent
   Qt6::Core
   Qt6::Gui
@@ -58,7 +58,7 @@ target_link_libraries(omarchy-capture-editor PRIVATE
   PkgConfig::WaylandClient
 )
 
-qt_add_executable(omarchy-capture-editor-smoke
+qt_add_executable(omasnap-smoke
   editor-smoke.cpp
   capture.cpp
   capture.hpp
@@ -67,15 +67,15 @@ qt_add_executable(omarchy-capture-editor-smoke
   editor.cpp
   editor.hpp
 )
-qt_add_resources(omarchy-capture-editor-smoke "capture-fonts-smoke"
+qt_add_resources(omasnap-smoke "capture-fonts-smoke"
   PREFIX "/fonts"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
 )
-target_include_directories(omarchy-capture-editor-smoke PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-target_compile_features(omarchy-capture-editor-smoke PRIVATE cxx_std_23)
-target_compile_options(omarchy-capture-editor-smoke PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(omarchy-capture-editor-smoke PRIVATE
+target_include_directories(omasnap-smoke PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_compile_features(omasnap-smoke PRIVATE cxx_std_23)
+target_compile_options(omasnap-smoke PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(omasnap-smoke PRIVATE
   Qt6::Concurrent
   Qt6::Core
   Qt6::Gui
@@ -84,13 +84,13 @@ target_link_libraries(omarchy-capture-editor-smoke PRIVATE
   PkgConfig::WaylandClient
 )
 
-install(TARGETS omarchy-capture-editor
+install(TARGETS omasnap
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(FILES assets/OFL.txt
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/omarchy-capture-editor"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/omasnap"
   RENAME Neucha-OFL.txt
 )
-install(FILES omarchy-capture-editor.desktop
+install(FILES omasnap.desktop
   DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
 )

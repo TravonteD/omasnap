@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Omarchy Capture Editor
+Name=Omasnap
 Comment=Capture and annotate a screenshot
-Exec=omarchy-capture-editor
+Exec=omasnap
 Icon=camera-photo
 Terminal=false
 NoDisplay=true

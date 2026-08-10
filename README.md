@@ -1,11 +1,11 @@
-# Omarchy Capture Editor 1.0
+# Omasnap
 
 A native Wayland screenshot and annotation overlay designed for Omarchy and Hyprland.
 It captures the focused monitor before mapping an exclusive layer-shell surface, so the
 editor never appears in its own screenshot. The editor retains annotations as movable,
 resizable vector layers and preserves the monitor's native pixels on scaled displays.
 
-[![Looping Omarchy Capture Editor demonstration](assets/capture-editor.gif)](assets/capture-editor.mp4)
+[![Looping Omasnap demonstration](assets/omasnap.gif)](assets/omasnap.mp4)
 
 ## Features
 
@@ -43,13 +43,13 @@ Runtime commands used by the application:
 Clone the repository and run the Omarchy installer:
 
 ```bash
-git clone https://github.com/tobi/omarchy-capture-editor.git
-cd omarchy-capture-editor
+git clone https://github.com/tobi/omasnap.git
+cd omasnap
 ./install-omarchy
 ```
 
 The installer uses Omarchy's package helper for missing dependencies, builds in
-`~/.cache/omarchy-capture-editor`, and installs under `~/.local`. It does not modify
+`~/.cache/omasnap`, and installs under `~/.local`. It does not modify
 Hyprland configuration.
 
 ### Hyprland binding
@@ -61,12 +61,12 @@ hl.unbind("PRINT")
 hl.unbind("F12")
 hl.unbind("ALT + SHIFT + 4")
 
-o.bind("PRINT", "Screenshot", "omarchy-capture-editor")
-o.bind("F12", "Screenshot", "omarchy-capture-editor")
-o.bind("ALT + SHIFT + 4", "Screenshot", "omarchy-capture-editor")
+o.bind("PRINT", "Screenshot", "omasnap")
+o.bind("F12", "Screenshot", "omasnap")
+o.bind("ALT + SHIFT + 4", "Screenshot", "omasnap")
 
 hl.layer_rule({
-  match = { namespace = "^omarchy-capture-editor$" },
+  match = { namespace = "^omasnap$" },
   no_anim = true,
   animation = "none",
 })
@@ -84,7 +84,7 @@ hyprctl binds -j | jq -c \
 `omarchy plugin add` is intentionally not used. Omarchy plugins are Quickshell QML
 extensions; they do not install native executables or system packages.
 
-Set `OMARCHY_CAPTURE_PREFIX` before running `install-omarchy` to use a prefix other than
+Set `OMASNAP_PREFIX` before running `install-omarchy` to use a prefix other than
 `~/.local`.
 
 ### Manual Arch Linux build
@@ -110,15 +110,15 @@ cmake --install build
 
 The install step places:
 
-- `~/.local/bin/omarchy-capture-editor`
-- `~/.local/share/applications/omarchy-capture-editor.desktop`
-- `~/.local/share/licenses/omarchy-capture-editor/Neucha-OFL.txt`
+- `~/.local/bin/omasnap`
+- `~/.local/share/applications/omasnap.desktop`
+- `~/.local/share/licenses/omasnap/Neucha-OFL.txt`
 
 Ensure `~/.local/bin` is on `PATH`, then verify the installed CLI:
 
 ```bash
-omarchy-capture-editor --version
-omarchy-capture-editor --help
+omasnap --version
+omasnap --help
 ```
 
 ## CLI capture modes
@@ -126,24 +126,24 @@ omarchy-capture-editor --help
 Running without arguments opens freeform region selection:
 
 ```bash
-omarchy-capture-editor
+omasnap
 ```
 
 Explicit starting modes:
 
 ```bash
-omarchy-capture-editor --capture-region
-omarchy-capture-editor --capture-window
-omarchy-capture-editor --capture-fullscreen
+omasnap --capture-region
+omasnap --capture-window
+omasnap --capture-fullscreen
 ```
 
 Compatibility positional names are also accepted:
 
 ```bash
-omarchy-capture-editor region
-omarchy-capture-editor windows
-omarchy-capture-editor fullscreen
-omarchy-capture-editor smart       # maps to region selection
+omasnap region
+omasnap windows
+omasnap fullscreen
+omasnap smart       # maps to region selection
 ```
 
 These options choose what is initially selected; the editor still controls whether the
@@ -152,12 +152,12 @@ result is copied, saved, or both.
 Environment overrides:
 
 ```bash
-OMARCHY_SCREENSHOT_DIR="$HOME/Pictures/Captures" omarchy-capture-editor
-OMARCHY_OCR_LANGS="eng+deu" omarchy-capture-editor
+OMASNAP_SCREENSHOT_DIR="$HOME/Pictures/Captures" omasnap
+OMASNAP_OCR_LANGS="eng+deu" omasnap
 ```
 
 Install the corresponding Tesseract language data before adding a language to
-`OMARCHY_OCR_LANGS`.
+`OMASNAP_OCR_LANGS`.
 
 ## Controls
 
@@ -204,7 +204,7 @@ handles outside the image recrop its corners or edges.
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 QT_QPA_PLATFORM=offscreen \
-  ./build/omarchy-capture-editor-smoke /tmp/omarchy-capture-editor-smoke
+  ./build/omasnap-smoke /tmp/omasnap-smoke
 ```
 
 The smoke executable exercises region/window/fullscreen startup modes, capture selection,
@@ -225,13 +225,13 @@ The capture and annotation workflow is inspired by three excellent screenshot to
   approachable annotation toolbar.
 
 Thanks to their authors and contributors for establishing the interaction patterns that made
-this project possible. Omarchy Capture Editor is an independent implementation and is not
+this project possible. Omasnap is an independent implementation and is not
 affiliated with those projects.
 
 ## Project history
 
 This standalone repository was extracted with `git filter-repo` from the original Omarchy
-system-customization repository. The former `capture-editor/` directory was promoted to
+system-customization repository. The former `omasnap/` directory was promoted to
 the repository root while retaining its relevant commit history.
 
 The bundled Neucha font is distributed under the SIL Open Font License; its license is in

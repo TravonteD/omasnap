@@ -16,12 +16,12 @@
 
 int main(int argc, char **argv) {
   QCoreApplication::setApplicationName(
-      QStringLiteral("omarchy-capture-editor"));
+      QStringLiteral("omasnap"));
   QCoreApplication::setApplicationVersion(
-      QString::fromLatin1(OMARCHY_CAPTURE_VERSION));
+      QString::fromLatin1(OMASNAP_VERSION));
   QCoreApplication::setOrganizationName(QStringLiteral("Omarchy"));
   qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
-  QGuiApplication::setDesktopFileName(QStringLiteral("omarchy-capture-editor"));
+  QGuiApplication::setDesktopFileName(QStringLiteral("omasnap"));
   QApplication application(argc, argv);
 
   QCommandLineParser parser;
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
   if (runtime.isEmpty())
     runtime = QDir::tempPath();
   QLockFile instanceLock(QDir(runtime).filePath(
-      QStringLiteral("omarchy-capture-editor.instance")));
+      QStringLiteral("omasnap.instance")));
   instanceLock.setStaleLockTime(0);
   if (!instanceLock.tryLock(0))
     return 0;
@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
     qCritical() << "Could not create capture overlay layer";
     return 1;
   }
-  layerWindow->setScope(QStringLiteral("omarchy-capture-editor"));
+  layerWindow->setScope(QStringLiteral("omasnap"));
   layerWindow->setScreen(targetScreen);
   layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
   LayerShellQt::Window::Anchors anchors;

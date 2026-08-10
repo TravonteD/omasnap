@@ -37,15 +37,15 @@ jobs:
       - name: Run interaction smoke
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ./build/omarchy-capture-editor-smoke /tmp/omarchy-capture-editor-smoke
+        run: ./build/omasnap-smoke /tmp/omasnap-smoke
 
       - name: Stage installation
         run: cmake --install build --prefix "$PWD/stage/usr"
 
       - name: Package Linux artifact
         run: |
-          version="$(QT_QPA_PLATFORM=offscreen ./build/omarchy-capture-editor --version | cut -d' ' -f2)"
-          archive="omarchy-capture-editor-${version}-archlinux-x86_64.tar.gz"
+          version="$(QT_QPA_PLATFORM=offscreen ./build/omasnap --version | cut -d' ' -f2)"
+          archive="omasnap-${version}-archlinux-x86_64.tar.gz"
           echo "CAPTURE_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "CAPTURE_ARTIFACT=${archive%.tar.gz}" >> "$GITHUB_ENV"
           tar -C stage -czf "$archive" .

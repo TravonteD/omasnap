@@ -15,10 +15,10 @@ int main(int argc, char **argv) {
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath())
-                     .filePath(QStringLiteral("omarchy-native-smoke"));
+                     .filePath(QStringLiteral("omasnap-native-smoke"));
 
   const QString nativeStableId =
-      qEnvironmentVariable("OMARCHY_CAPTURE_SMOKE_NATIVE_STABLE_ID");
+      qEnvironmentVariable("OMASNAP_SMOKE_NATIVE_STABLE_ID");
   if (!nativeStableId.isEmpty()) {
     QImage nativeSurface;
     QString nativeError;
@@ -318,13 +318,13 @@ int main(int argc, char **argv) {
                         "PNG"))
     return 15;
 
-  if (qEnvironmentVariableIsSet("OMARCHY_CAPTURE_SMOKE_COPY")) {
+  if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_COPY")) {
     QString clipboardError;
     if (!copyPngToClipboard(rendered, clipboardError))
       return 4;
   }
 
-  if (qEnvironmentVariableIsSet("OMARCHY_CAPTURE_SMOKE_SAVE")) {
+  if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_SAVE")) {
     QString saveError;
     if (saveScreenshot(rendered, saveError).isEmpty())
       return 6;

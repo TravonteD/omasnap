@@ -291,7 +291,7 @@ QString backgroundName(BackgroundStyle style) {
 CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
                              QWidget *parent)
     : QWidget(parent), capture_(std::move(capture)) {
-  setWindowTitle(QStringLiteral("Omarchy Capture Editor"));
+  setWindowTitle(QStringLiteral("Omasnap"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
                  Qt::WindowStaysOnTopHint);
   setAttribute(Qt::WA_OpaquePaintEvent);

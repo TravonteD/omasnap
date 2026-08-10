@@ -360,7 +360,7 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error,
   }
 
   QTemporaryFile sourceFile(
-      runtimePath(QStringLiteral("omarchy-capture-XXXXXX.ppm")));
+      runtimePath(QStringLiteral("omasnap-capture-XXXXXX.ppm")));
   sourceFile.setAutoRemove(true);
   if (!sourceFile.open()) {
     error = sourceFile.errorString();
@@ -513,7 +513,7 @@ bool copyPngToClipboard(const QImage &image, QString &error) {
 }
 
 QString saveScreenshot(const QImage &image, QString &error) {
-  QString root = qEnvironmentVariable("OMARCHY_SCREENSHOT_DIR");
+  QString root = qEnvironmentVariable("OMASNAP_SCREENSHOT_DIR");
   if (root.isEmpty())
     root =
         QDir(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation))
@@ -557,7 +557,7 @@ bool copyTextToClipboard(const QString &text, QString &error) {
 }
 
 QString recognizeText(const QImage &image, QString &error) {
-  QTemporaryFile input(runtimePath(QStringLiteral("omarchy-ocr-XXXXXX.png")));
+  QTemporaryFile input(runtimePath(QStringLiteral("omasnap-ocr-XXXXXX.png")));
   input.setAutoRemove(true);
   if (!input.open()) {
     error = input.errorString();
@@ -571,7 +571,7 @@ QString recognizeText(const QImage &image, QString &error) {
   }
 
   const QString languages =
-      qEnvironmentVariable("OMARCHY_OCR_LANGS", QStringLiteral("eng"));
+      qEnvironmentVariable("OMASNAP_OCR_LANGS", QStringLiteral("eng"));
   const ProcessResult result = runProcess(
       QStringLiteral("tesseract"),
       {path, QStringLiteral("stdout"), QStringLiteral("--oem"),
