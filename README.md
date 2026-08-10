@@ -5,15 +5,7 @@ It captures the focused monitor before mapping an exclusive layer-shell surface,
 editor never appears in its own screenshot. The editor retains annotations as movable,
 resizable vector layers and preserves the monitor's native pixels on scaled displays.
 
-<video
-  src="https://raw.githubusercontent.com/tobi/omarchy-capture-editor/main/assets/capture-editor.mp4"
-  autoplay
-  loop
-  muted
-  playsinline
-  controls
-  width="100%">
-</video>
+[![Looping Omarchy Capture Editor demonstration](assets/capture-editor.gif)](assets/capture-editor.mp4)
 
 ## Features
 
@@ -201,7 +193,7 @@ Install the corresponding Tesseract language data before adding a language to
 | `Ctrl+C` | Copy PNG only |
 | `Ctrl+S` | Save PNG only |
 | `Enter` | Copy and save |
-| `Esc` | Switch to Arrow; press again to close |
+| `Esc` | Return to Select; press again to close |
 
 Creation tools return to Select after one placement. In Select mode, the eight blue/white
 handles outside the image recrop its corners or edges.
