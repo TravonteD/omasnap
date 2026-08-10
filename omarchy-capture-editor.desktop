@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Omarchy Capture Editor
+Comment=Capture and annotate a screenshot
+Exec=omarchy-capture-editor
+Icon=camera-photo
+Terminal=false
+NoDisplay=true
+Categories=Graphics;
+StartupNotify=false
