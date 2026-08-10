@@ -15,8 +15,10 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
 - Arrows, straight lines, smoothed freehand strokes, rectangles, numbered markers, and
   editable Neucha text.
-- Per-layer preset or custom colors, undo, OCR-region capture, mesh-gradient backdrops,
-  and rendered drop shadows.
+- Per-layer preset or custom colors, undo/redo history, OCR-region capture,
+  mesh-gradient backdrops, and rendered drop shadows.
+- Working snapshots under `/tmp/omasnap/snapshot-<pid>.png`, written immediately after
+  selection and overwritten after every completed edit.
 - PNG clipboard output through `wl-copy` and timestamped files under
   `~/Pictures/Screenshots` by default.
 - Correct native-pixel export on fractional or integer-scaled monitors.
@@ -190,13 +192,16 @@ Install the corresponding Tesseract language data before adding a language to
 | Double-click text | Reopen text editing |
 | `Delete` | Delete selected layer |
 | `Ctrl+Z` | Undo |
+| `Ctrl+Shift+Z`, `Ctrl+Y` | Redo |
 | `Ctrl+C` | Copy PNG only |
 | `Ctrl+S` | Save PNG only |
 | `Enter` | Copy and save |
 | `Esc` | Return to Select; press again to close |
 
-Creation tools return to Select after one placement. In Select mode, the eight blue/white
-handles outside the image recrop its corners or edges.
+Creation tools return to Select after one placement without selecting the new layer. In
+Select mode, arrows and lines show only their two endpoint handles; other layers show a
+selection boundary. The eight blue/white handles outside the image recrop its corners or
+edges.
 
 ## Development and verification
 
@@ -208,8 +213,9 @@ QT_QPA_PLATFORM=offscreen \
 ```
 
 The smoke executable exercises region/window/fullscreen startup modes, capture selection,
-annotation tools, vector movement and scaling, text editing, OCR, native-DPI output, and
-external crop handles.
+temporary snapshot updates, annotation tools, undo/redo, vector movement and scaling,
+text editing, OCR, native-DPI output, endpoint-only line selection, and external crop
+handles.
 
 `.github/workflows/build-linux.yml` performs the same release build and interaction smoke
 in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux

@@ -3,9 +3,11 @@
 #include <QApplication>
 #include <QBuffer>
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -536,6 +538,32 @@ QString saveScreenshot(const QImage &image, QString &error) {
     return {};
   }
   return path;
+}
+
+QString temporarySnapshotPath() {
+  return QDir(QStringLiteral("/tmp/omasnap"))
+      .filePath(QStringLiteral("snapshot-%1.png")
+                    .arg(QCoreApplication::applicationPid()));
+}
+
+bool saveTemporarySnapshot(const QImage &image, QString path, QString &error) {
+  if (image.isNull()) {
+    error = QStringLiteral("Temporary snapshot is empty");
+    return false;
+  }
+  if (path.isEmpty())
+    path = temporarySnapshotPath();
+  const QDir root = QFileInfo(path).absoluteDir();
+  if (!QDir().mkpath(root.absolutePath())) {
+    error = QStringLiteral("Could not create snapshot directory: %1")
+                .arg(root.absolutePath());
+    return false;
+  }
+  if (!image.save(path, "PNG")) {
+    error = QStringLiteral("Could not save temporary snapshot: %1").arg(path);
+    return false;
+  }
+  return true;
 }
 
 bool copyTextToClipboard(const QString &text, QString &error) {

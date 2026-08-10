@@ -74,6 +74,14 @@ private:
     QString error;
   };
 
+  struct EditState {
+    QVector<Annotation> annotations;
+    BackgroundStyle backgroundStyle = BackgroundStyle::None;
+    QRectF selection;
+    int selectedAnnotation = -1;
+    int nextMarker = 1;
+  };
+
   [[nodiscard]] QRectF annotationBounds(const Annotation &annotation) const;
   [[nodiscard]] int annotationAt(const QPointF &point) const;
   [[nodiscard]] QRectF normalizedSelection(const QPointF &first,
@@ -94,8 +102,16 @@ private:
 
   void acceptText();
   void applyCustomColor(const QPointF &position);
+  void applyEditState(const EditState &state);
+  void cancelActiveDragForHistory();
   void beginText(const QPointF &point, int annotationIndex = -1);
   void chooseWindow(int index);
+  [[nodiscard]] EditState editState() const;
+  void enterEdit(QString status);
+  void persistSnapshot();
+  void pushUndoState(const EditState &state);
+  void recordEdit();
+  void redoEdit();
   void selectWindowInDirection(int key);
   void finish(OutputMode mode);
   void handleEscape();
@@ -105,6 +121,7 @@ private:
   void runOcr(const QRectF &localSelection = {});
   void setStatus(QString status);
   void scaleSelectedAnnotation(qreal factor);
+  void undoEdit();
   void updatePointerCursor();
 
   CaptureData capture_;
@@ -135,6 +152,12 @@ private:
   int selectedAnnotation_ = -1;
   int editingAnnotation_ = -1;
   Annotation originalAnnotation_;
+  QVector<EditState> undoStack_;
+  QVector<EditState> redoStack_;
+  EditState dragStartState_;
+  bool dragStartStateValid_ = false;
+  bool dragChanged_ = false;
+  QString snapshotPath_;
   QString status_ =
       QStringLiteral("Drag to select an area · Space selects a window");
   QLineEdit *textEditor_ = nullptr;

@@ -4,6 +4,8 @@
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QPainter>
 #include <QWheelEvent>
 #include <QtTest/QTest>
@@ -16,6 +18,8 @@ int main(int argc, char **argv) {
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath())
                      .filePath(QStringLiteral("omasnap-native-smoke"));
+  const QString snapshotPath = temporarySnapshotPath();
+  QFile::remove(snapshotPath);
 
   const QString nativeStableId =
       qEnvironmentVariable("OMASNAP_SMOKE_NATIVE_STABLE_ID");
@@ -80,6 +84,11 @@ int main(int argc, char **argv) {
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(650, 470));
   application.processEvents();
+  const QFileInfo initialSnapshotInfo(snapshotPath);
+  const QImage initialSnapshot(snapshotPath);
+  if (!initialSnapshotInfo.exists() || initialSnapshotInfo.size() <= 0 ||
+      initialSnapshot.isNull())
+    return 37;
   if (editor.cursor().shape() != Qt::ArrowCursor ||
       !editor.grab().save(outputRoot + QStringLiteral("-selector-default.png"),
                           "PNG"))
@@ -97,6 +106,28 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (editor.cursor().shape() != Qt::ArrowCursor)
     return 26;
+  const QImage arrowSnapshot(snapshotPath);
+  if (arrowSnapshot.isNull() || arrowSnapshot == initialSnapshot)
+    return 38;
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 300));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 300));
+  QTest::mouseMove(&editor, QPoint(420, 315), 20);
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(420, 315));
+  application.processEvents();
+  if (QImage(snapshotPath) != initialSnapshot)
+    return 56;
+  QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != arrowSnapshot)
+    return 57;
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(140, 140));
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_Delete);
+  application.processEvents();
+  if (QImage(snapshotPath) != arrowSnapshot)
+    return 39;
   QTest::keyClick(&editor, Qt::Key_L);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(260, 210));
   QTest::mouseMove(&editor, QPoint(520, 265), 20);
@@ -105,6 +136,34 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (editor.cursor().shape() != Qt::ArrowCursor)
     return 27;
+  const QImage lineSnapshot(snapshotPath);
+  if (lineSnapshot.isNull() || lineSnapshot == arrowSnapshot)
+    return 40;
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != arrowSnapshot)
+    return 41;
+  QTest::keyClick(&editor, Qt::Key_Z,
+                  Qt::ControlModifier | Qt::ShiftModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != lineSnapshot)
+    return 42;
+
+  const QImage lineUnselectedUi = editor.grab().toImage();
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(390, 238));
+  application.processEvents();
+  const QImage lineSelectedUi = editor.grab().toImage();
+  if (lineSelectedUi.pixelColor(260, 210) !=
+          QColor(QStringLiteral("#0a84ff")) ||
+      lineSelectedUi.pixelColor(520, 265) !=
+          QColor(QStringLiteral("#0a84ff")))
+    return 43;
+  for (int x = 280; x <= 500; ++x) {
+    if (lineSelectedUi.pixelColor(x, 206) !=
+        lineUnselectedUi.pixelColor(x, 206))
+      return 44;
+  }
+
   const QImage beforeSelectorZoom =
       editor.grab().toImage().copy(QRect(100, 150, 600, 350));
   QWheelEvent selectorZoom(QPointF(520, 265), QPointF(520, 265), {}, {0, 120},
@@ -116,6 +175,19 @@ int main(int argc, char **argv) {
       editor.grab().toImage().copy(QRect(100, 150, 600, 350));
   if (beforeSelectorZoom == afterSelectorZoom)
     return 30;
+  const QImage scaledLineSnapshot(snapshotPath);
+  if (scaledLineSnapshot.isNull() || scaledLineSnapshot == lineSnapshot)
+    return 45;
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != lineSnapshot)
+    return 46;
+  QTest::keyClick(&editor, Qt::Key_Z,
+                  Qt::ControlModifier | Qt::ShiftModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != scaledLineSnapshot)
+    return 47;
+  const QImage beforeFreehandSnapshot(snapshotPath);
   QTest::keyClick(&editor, Qt::Key_F);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(270, 390));
   QTest::mouseMove(&editor, QPoint(330, 360), 10);
@@ -124,13 +196,19 @@ int main(int argc, char **argv) {
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(530, 420));
   application.processEvents();
-  if (editor.cursor().shape() != Qt::ArrowCursor)
+  if (editor.cursor().shape() != Qt::ArrowCursor ||
+      QImage(snapshotPath) == beforeFreehandSnapshot)
     return 28;
+  const QImage beforeMarkerSnapshot(snapshotPath);
   QTest::keyClick(&editor, Qt::Key_2);
   QTest::keyClick(&editor, Qt::Key_C);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(470, 300));
+  application.processEvents();
+  if (QImage(snapshotPath) == beforeMarkerSnapshot)
+    return 48;
+  const QImage beforeTextSnapshot(snapshotPath);
   QTest::keyClick(&editor, Qt::Key_T);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(352, 133));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(320, 133));
   QWheelEvent textSizeWheel(QPointF(360, 320), QPointF(360, 320), {}, {0, -120},
                             Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
                             false);
@@ -148,18 +226,44 @@ int main(int argc, char **argv) {
   QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-text-committed.png"),
-                          "PNG"))
+                          "PNG") ||
+      QImage(snapshotPath) == beforeTextSnapshot)
     return 20;
+  const QImage beforeMoveSnapshot(snapshotPath);
   QTest::keyClick(&editor, Qt::Key_V);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 300));
   QTest::mouseMove(&editor, QPoint(420, 315), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(420, 315));
+  application.processEvents();
+  const QImage movedSnapshot(snapshotPath);
+  if (movedSnapshot.isNull() || movedSnapshot == beforeMoveSnapshot)
+    return 49;
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != beforeMoveSnapshot)
+    return 50;
+  QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != movedSnapshot)
+    return 51;
+  const QImage beforeEndpointSnapshot(snapshotPath);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(590, 365));
   QTest::mouseMove(&editor, QPoint(620, 380), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(620, 380));
   application.processEvents();
+  const QImage resizedSnapshot(snapshotPath);
+  if (resizedSnapshot.isNull() || resizedSnapshot == beforeEndpointSnapshot)
+    return 52;
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != beforeEndpointSnapshot)
+    return 53;
+  QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+  application.processEvents();
+  if (QImage(snapshotPath) != resizedSnapshot)
+    return 54;
   if (!editor.grab().save(outputRoot + QStringLiteral("-vector-selected.png"),
                           "PNG"))
     return 21;
@@ -172,14 +276,18 @@ int main(int argc, char **argv) {
   } else {
     return 22;
   }
+  const QImage beforeBackdropSnapshot(snapshotPath);
   QTest::keyClick(&editor, Qt::Key_B);
-  QTest::mouseMove(&editor, QPoint(398, 92), 20);
+  application.processEvents();
+  if (QImage(snapshotPath) == beforeBackdropSnapshot)
+    return 55;
+  QTest::mouseMove(&editor, QPoint(378, 92), 20);
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-palette.png"), "PNG"))
     return 14;
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(480, 134));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(460, 134));
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(320, 200));
-  QTest::mouseMove(&editor, QPoint(198, 92), 20);
+  QTest::mouseMove(&editor, QPoint(178, 92), 20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor)
     return 12;
@@ -234,6 +342,15 @@ int main(int argc, char **argv) {
   QTest::mouseRelease(&cropEditor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(650, 470));
   application.processEvents();
+  QTest::keyClick(&cropEditor, Qt::Key_L);
+  QTest::mousePress(&cropEditor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(260, 210));
+  QTest::mouseMove(&cropEditor, QPoint(520, 265), 20);
+  QTest::mouseRelease(&cropEditor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(520, 265));
+  QTest::mouseClick(&cropEditor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(390, 238));
+  application.processEvents();
   const QImage beforeCrop = cropEditor.grab().toImage();
   if (!beforeCrop.save(outputRoot + QStringLiteral("-crop-handles.png"), "PNG"))
     return 31;
@@ -248,6 +365,11 @@ int main(int argc, char **argv) {
   if (beforeCrop == afterCrop ||
       !afterCrop.save(outputRoot + QStringLiteral("-cropped.png"), "PNG"))
     return 32;
+  QTest::keyClick(&cropEditor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (cropEditor.grab().toImage().pixelColor(260, 210) !=
+      QColor(QStringLiteral("#0a84ff")))
+    return 58;
 
   QVector<Annotation> annotations;
   annotations.push_back({Annotation::Kind::Arrow,
