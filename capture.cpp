@@ -1,7 +1,6 @@
 #include "capture.hpp"
 
 #include <QApplication>
-#include <QBuffer>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -72,6 +71,28 @@ QString runtimePath(const QString &name) {
   if (runtime.isEmpty())
     runtime = QDir::tempPath();
   return QDir(runtime).filePath(name);
+}
+
+QString screenshotTargetPath(QString &error) {
+  QString root = qEnvironmentVariable("OMASNAP_SCREENSHOT_DIR");
+  if (root.isEmpty())
+    root =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation))
+            .filePath(QStringLiteral("Screenshots"));
+  if (!QDir().mkpath(root)) {
+    error =
+        QStringLiteral("Could not create screenshot directory: %1").arg(root);
+    return {};
+  }
+
+  const QString stem = QStringLiteral("screenshot-%1")
+                           .arg(QDateTime::currentDateTime().toString(
+                               QStringLiteral("yyyy-MM-dd_HH-mm-ss")));
+  QString path = QDir(root).filePath(stem + QStringLiteral(".png"));
+  for (int suffix = 2; QFile::exists(path); ++suffix)
+    path =
+        QDir(root).filePath(QStringLiteral("%1-%2.png").arg(stem).arg(suffix));
+  return path;
 }
 
 bool parseMonitor(const QByteArray &json, MonitorInfo &monitor,
@@ -255,14 +276,6 @@ QRect pixelSelection(const CaptureData &capture, const QRectF &selection) {
   return QRect(QPoint(left, top), QPoint(right - 1, bottom - 1));
 }
 
-bool encodePng(const QImage &image, QByteArray &png, QString &error) {
-  QBuffer buffer(&png);
-  if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG")) {
-    error = QStringLiteral("Could not encode screenshot as PNG");
-    return false;
-  }
-  return true;
-}
 } // namespace
 
 void paintAnnotation(QPainter &painter, const Annotation &annotation) {
@@ -493,16 +506,21 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   return output;
 }
 
-bool copyPngToClipboard(const QImage &image, QString &error) {
-  if (image.isNull()) {
-    error = QStringLiteral("Screenshot is empty");
+bool copyPngFileToClipboard(const QString &path, QString &error) {
+  QFile input(path);
+  if (!input.open(QIODevice::ReadOnly)) {
+    error = QStringLiteral("Could not read screenshot snapshot: %1").arg(path);
     return false;
   }
-  QApplication::clipboard()->setImage(image);
-
-  QByteArray png;
-  if (!encodePng(image, png, error))
+  const QByteArray png = input.readAll();
+  if (png.isEmpty()) {
+    error = QStringLiteral("Screenshot snapshot is empty: %1").arg(path);
     return false;
+  }
+  QImage image;
+  if (image.loadFromData(png, "PNG"))
+    QApplication::clipboard()->setImage(image);
+
   const ProcessResult copied = runProcess(
       QStringLiteral("wl-copy"),
       {QStringLiteral("--type"), QStringLiteral("image/png")}, png, 5000);
@@ -514,30 +532,19 @@ bool copyPngToClipboard(const QImage &image, QString &error) {
   return true;
 }
 
-QString saveScreenshot(const QImage &image, QString &error) {
-  QString root = qEnvironmentVariable("OMASNAP_SCREENSHOT_DIR");
-  if (root.isEmpty())
-    root =
-        QDir(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation))
-            .filePath(QStringLiteral("Screenshots"));
-  if (!QDir().mkpath(root)) {
-    error =
-        QStringLiteral("Could not create screenshot directory: %1").arg(root);
+QString moveSnapshotToScreenshots(const QString &sourcePath, QString &error) {
+  const QString targetPath = screenshotTargetPath(error);
+  if (targetPath.isEmpty())
     return {};
+  if (QFile::rename(sourcePath, targetPath))
+    return targetPath;
+  if (QFile::copy(sourcePath, targetPath)) {
+    QFile::remove(sourcePath);
+    return targetPath;
   }
-
-  const QString stem = QStringLiteral("screenshot-%1")
-                           .arg(QDateTime::currentDateTime().toString(
-                               QStringLiteral("yyyy-MM-dd_HH-mm-ss")));
-  QString path = QDir(root).filePath(stem + QStringLiteral(".png"));
-  for (int suffix = 2; QFile::exists(path); ++suffix)
-    path =
-        QDir(root).filePath(QStringLiteral("%1-%2.png").arg(stem).arg(suffix));
-  if (!image.save(path, "PNG")) {
-    error = QStringLiteral("Could not save screenshot: %1").arg(path);
-    return {};
-  }
-  return path;
+  error = QStringLiteral("Could not move screenshot snapshot to: %1")
+              .arg(targetPath);
+  return {};
 }
 
 QString temporarySnapshotPath() {

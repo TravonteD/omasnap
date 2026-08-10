@@ -20,6 +20,9 @@ int main(int argc, char **argv) {
                      .filePath(QStringLiteral("omasnap-native-smoke"));
   const QString snapshotPath = temporarySnapshotPath();
   QFile::remove(snapshotPath);
+  const QString savedRoot = QDir(outputRoot).filePath(QStringLiteral("saved"));
+  QDir(savedRoot).removeRecursively();
+  qputenv("OMASNAP_SCREENSHOT_DIR", savedRoot.toUtf8());
 
   const QString nativeStableId =
       qEnvironmentVariable("OMASNAP_SMOKE_NATIVE_STABLE_ID");
@@ -440,18 +443,6 @@ int main(int argc, char **argv) {
                         "PNG"))
     return 15;
 
-  if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_COPY")) {
-    QString clipboardError;
-    if (!copyPngToClipboard(rendered, clipboardError))
-      return 4;
-  }
-
-  if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_SAVE")) {
-    QString saveError;
-    if (saveScreenshot(rendered, saveError).isEmpty())
-      return 6;
-  }
-
   QImage ocrImage(1000, 260, QImage::Format_RGB32);
   ocrImage.fill(Qt::white);
   {
@@ -475,5 +466,33 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (editor.isVisible())
     return 25;
+
+  CaptureEditor finishEditor(capture);
+  finishEditor.resize(800, 600);
+  finishEditor.show();
+  application.processEvents();
+  QTest::mousePress(&finishEditor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(100, 100));
+  QTest::mouseMove(&finishEditor, QPoint(650, 470), 20);
+  QTest::mouseRelease(&finishEditor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(650, 470));
+  QTest::keyClick(&finishEditor, Qt::Key_C);
+  QTest::mouseClick(&finishEditor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(470, 300));
+  application.processEvents();
+  const QImage snapshotBeforeSave(snapshotPath);
+  if (snapshotBeforeSave.isNull())
+    return 59;
+  QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
+  application.processEvents();
+  const QStringList savedFiles =
+      QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
+          .entryList({QStringLiteral("*.png")}, QDir::Files);
+  if (finishEditor.isVisible() || savedFiles.size() != 1)
+    return 60;
+  const QString savedPath = QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
+                                .filePath(savedFiles.constFirst());
+  if (QImage(savedPath) != snapshotBeforeSave || QFile::exists(snapshotPath))
+    return 61;
   return 0;
 }

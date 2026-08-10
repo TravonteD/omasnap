@@ -56,12 +56,13 @@ struct Annotation {
                                    const QRectF &selection,
                                    const QVector<Annotation> &annotations,
                                    BackgroundStyle backgroundStyle);
-[[nodiscard]] bool copyPngToClipboard(const QImage &image, QString &error);
+[[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);
 [[nodiscard]] bool copyTextToClipboard(const QString &text, QString &error);
 void paintAnnotation(QPainter &painter, const Annotation &annotation);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle);
-[[nodiscard]] QString saveScreenshot(const QImage &image, QString &error);
+[[nodiscard]] QString moveSnapshotToScreenshots(const QString &sourcePath,
+                                                QString &error);
 [[nodiscard]] QString temporarySnapshotPath();
 [[nodiscard]] bool saveTemporarySnapshot(const QImage &image, QString path,
                                          QString &error);

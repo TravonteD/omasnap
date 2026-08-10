@@ -7,6 +7,7 @@
 #include <QCursor>
 #include <QDebug>
 #include <QEvent>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QGuiApplication>
@@ -1025,32 +1026,34 @@ void CaptureEditor::finish(OutputMode mode) {
   if (busy_ || selection_.isEmpty())
     return;
   busy_ = true;
-  setStatus(QStringLiteral("Rendering screenshot…"));
+  setStatus(QStringLiteral("Preparing screenshot…"));
   QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-  const QImage image =
-      renderCapture(capture_, selection_, annotations_, backgroundStyle_);
-  if (image.isNull()) {
+  persistSnapshot();
+  const QFileInfo snapshotFile(snapshotPath_);
+  if (snapshotPath_.isEmpty() || !snapshotFile.exists() ||
+      snapshotFile.size() <= 0) {
     busy_ = false;
-    setStatus(QStringLiteral("Could not render screenshot"));
+    setStatus(QStringLiteral("Could not prepare screenshot snapshot"));
     return;
   }
 
   QString error;
   QString saved;
   if (mode == OutputMode::Copy || mode == OutputMode::Both) {
-    if (!copyPngToClipboard(image, error)) {
+    if (!copyPngFileToClipboard(snapshotPath_, error)) {
       busy_ = false;
       setStatus(error);
       return;
     }
   }
   if (mode == OutputMode::Save || mode == OutputMode::Both) {
-    saved = saveScreenshot(image, error);
+    saved = moveSnapshotToScreenshots(snapshotPath_, error);
     if (saved.isEmpty()) {
       busy_ = false;
       setStatus(error);
       return;
     }
+    snapshotPath_ = saved;
   }
 
   if (mode == OutputMode::Copy)

@@ -17,8 +17,9 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
   editable Neucha text.
 - Per-layer preset or custom colors, undo/redo history, OCR-region capture,
   mesh-gradient backdrops, and rendered drop shadows.
-- Working snapshots under `/tmp/omasnap/snapshot-<pid>.png`, written immediately after
-  selection and overwritten after every completed edit.
+- Crash-resistant working snapshots under `/tmp/omasnap/snapshot-<pid>.png`, written
+  immediately after selection and overwritten after every completed edit. Saving moves
+  that file into `~/Pictures/Screenshots`; clipboard output streams the same PNG.
 - PNG clipboard output through `wl-copy` and timestamped files under
   `~/Pictures/Screenshots` by default.
 - Correct native-pixel export on fractional or integer-scaled monitors.
