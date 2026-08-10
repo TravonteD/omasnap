@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(omarchy-capture-editor VERSION 1.0.1 LANGUAGES C CXX)
+project(omarchy-capture-editor VERSION 1.0.2 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 find_package(PkgConfig REQUIRED)
@@ -86,12 +86,6 @@ target_link_libraries(omarchy-capture-editor-smoke PRIVATE
 
 install(TARGETS omarchy-capture-editor
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)
-install(PROGRAMS omarchy-capture-editor-setup
-  DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)
-install(FILES hypr/omarchy_capture_editor.lua
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/omarchy-capture-editor"
 )
 install(FILES assets/OFL.txt
   DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/omarchy-capture-editor"

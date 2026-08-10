@@ -21,6 +21,4 @@ cmake -S "$repo_dir" -B "$build_dir" -G Ninja \
 cmake --build "$build_dir" --parallel
 cmake --install "$build_dir"
 
-OMARCHY_CAPTURE_EDITOR_HYPR_MODULE="$prefix/share/omarchy-capture-editor/omarchy_capture_editor.lua" \
-  "$prefix/bin/omarchy-capture-editor-setup"
 "$prefix/bin/omarchy-capture-editor" --version

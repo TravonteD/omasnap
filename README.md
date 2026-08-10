@@ -41,27 +41,46 @@ Runtime commands used by the application:
 Clone the repository and run the Omarchy installer:
 
 ```bash
-git clone <repository-url> omarchy-capture-editor
+git clone https://github.com/tobi/omarchy-capture-editor.git
 cd omarchy-capture-editor
 ./install-omarchy
 ```
 
 The installer uses Omarchy's package helper for missing dependencies, builds in
-`~/.cache/omarchy-capture-editor`, installs under `~/.local`, and runs
-`omarchy-capture-editor-setup`. The setup helper creates its own
-`~/.config/hypr/omarchy_capture_editor.lua` module and appends one guarded `require(...)`
-line to `hyprland.lua` after making a timestamped backup. A pre-existing
-`personal_bindings.lua` is not required.
+`~/.cache/omarchy-capture-editor`, and installs under `~/.local`. It does not modify
+Hyprland configuration.
 
-`omarchy plugin add` is intentionally not used. Omarchy plugins are Quickshell QML
-extensions; they do not install native executables or system packages. A dummy shell plugin
-would add a second installation mechanism without helping the screenshot workflow.
+### Hyprland binding
 
-To remove only the Hyprland integration:
+Paste this into a Lua config loaded after `require("default.hypr.omarchy")`:
+
+```lua
+hl.unbind("PRINT")
+hl.unbind("F12")
+hl.unbind("ALT + SHIFT + 4")
+
+o.bind("PRINT", "Screenshot", "omarchy-capture-editor")
+o.bind("F12", "Screenshot", "omarchy-capture-editor")
+o.bind("ALT + SHIFT + 4", "Screenshot", "omarchy-capture-editor")
+
+hl.layer_rule({
+  match = { namespace = "^omarchy-capture-editor$" },
+  no_anim = true,
+  animation = "none",
+})
+```
+
+Apply and verify:
 
 ```bash
-omarchy-capture-editor-setup --remove
+hyprctl reload
+hyprctl configerrors
+hyprctl binds -j | jq -c \
+  '[.[] | select(.description == "Screenshot") | {modmask,key,description}]'
 ```
+
+`omarchy plugin add` is intentionally not used. Omarchy plugins are Quickshell QML
+extensions; they do not install native executables or system packages.
 
 Set `OMARCHY_CAPTURE_PREFIX` before running `install-omarchy` to use a prefix other than
 `~/.local`.
@@ -85,15 +104,12 @@ cmake -S . -B build -G Ninja \
   -DCMAKE_INSTALL_PREFIX="$HOME/.local"
 cmake --build build --parallel
 cmake --install build
-omarchy-capture-editor-setup  # Omarchy integration; omit on other desktops
 ```
 
 The install step places:
 
 - `~/.local/bin/omarchy-capture-editor`
-- `~/.local/bin/omarchy-capture-editor-setup`
 - `~/.local/share/applications/omarchy-capture-editor.desktop`
-- `~/.local/share/omarchy-capture-editor/omarchy_capture_editor.lua`
 - `~/.local/share/licenses/omarchy-capture-editor/Neucha-OFL.txt`
 
 Ensure `~/.local/bin` is on `PATH`, then verify the installed CLI:
@@ -140,46 +156,6 @@ OMARCHY_OCR_LANGS="eng+deu" omarchy-capture-editor
 
 Install the corresponding Tesseract language data before adding a language to
 `OMARCHY_OCR_LANGS`.
-
-## Standard Omarchy binding
-
-Standard Omarchy binds unmodified `PRINT` to `omarchy-capture-screenshot`. Its modified
-Print chords remain separate actions:
-
-- `ALT + PRINT`: screen recording
-- `SUPER + PRINT`: color picker
-- `SUPER + CTRL + PRINT`: one-shot OCR
-
-`omarchy-capture-editor-setup` overrides only the exact standard screenshot chord. It
-installs this dedicated module:
-
-```lua
--- ~/.config/hypr/omarchy_capture_editor.lua
-hl.unbind("PRINT")
-o.bind("PRINT", "Screenshot", "omarchy-capture-editor")
-
-hl.layer_rule({
-  match = { namespace = "^omarchy-capture-editor$" },
-  no_anim = true,
-  animation = "none",
-})
-```
-
-The helper appends `require("hypr.omarchy_capture_editor")` to `hyprland.lua`, after
-Omarchy's defaults have already loaded. Re-running it is idempotent. It neither creates nor
-depends on `personal_bindings.lua`, and it does not claim `SUPER + SHIFT + S` or any other
-nonstandard screenshot chord.
-
-Verify the live result:
-
-```bash
-hyprctl configerrors
-hyprctl binds -j | jq -c \
-  '[.[] | select(.description == "Screenshot") | {modmask,key,description}]'
-```
-
-`hyprctl configerrors` should print nothing; the binding query should return exactly one
-entry with `modmask: 0` and `key: "PRINT"`.
 
 ## Controls
 
@@ -234,9 +210,8 @@ annotation tools, vector movement and scaling, text editing, OCR, native-DPI out
 external crop handles.
 
 `.github/workflows/build-linux.yml` performs the same release build and interaction smoke
-in an Arch Linux container, stages the CMake installation, and verifies that the Omarchy
-setup is idempotent and removable. It uploads a versioned Linux artifact; a `v*` tag also
-attaches that artifact to the corresponding GitHub release.
+in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux
+artifact. A `v*` tag also attaches that artifact to the corresponding GitHub release.
 
 ## Acknowledgements
 
