@@ -28,12 +28,34 @@ protected:
   void wheelEvent(QWheelEvent *event) override;
 
 public:
-  enum class Tool { Select, Arrow, Line, Freehand, Marker, Rectangle, Text, Ocr };
+  enum class Tool {
+    Select,
+    Arrow,
+    Line,
+    Freehand,
+    Marker,
+    Rectangle,
+    Text,
+    Ocr
+  };
 
 private:
   enum class Phase { Select, Edit };
   enum class OutputMode { Copy, Save, Both };
-  enum class Interaction { None, Move, ResizeStart, ResizeEnd };
+  enum class Interaction {
+    None,
+    Move,
+    ResizeStart,
+    ResizeEnd,
+    CropTopLeft,
+    CropTop,
+    CropTopRight,
+    CropRight,
+    CropBottomRight,
+    CropBottom,
+    CropBottomLeft,
+    CropLeft
+  };
 
   struct ToolbarButton {
     QRectF rect;
@@ -50,10 +72,13 @@ private:
 
   [[nodiscard]] QRectF annotationBounds(const Annotation &annotation) const;
   [[nodiscard]] int annotationAt(const QPointF &point) const;
-  [[nodiscard]] QRectF normalizedSelection(const QPointF &first, const QPointF &second) const;
+  [[nodiscard]] QRectF normalizedSelection(const QPointF &first,
+                                           const QPointF &second) const;
   [[nodiscard]] QRectF colorPaletteRect() const;
   [[nodiscard]] QRectF customColorPanelRect() const;
   [[nodiscard]] QRectF textSizePanelRect() const;
+  [[nodiscard]] QVector<QRectF> cropHandleRects() const;
+  [[nodiscard]] int cropHandleAt(const QPointF &point) const;
   [[nodiscard]] QRectF editImageRect() const;
   [[nodiscard]] qreal editScale() const;
   [[nodiscard]] QPointF toAnnotationPoint(const QPointF &position) const;
@@ -75,13 +100,16 @@ private:
   void paintSelect(QPainter &painter);
   void runOcr(const QRectF &localSelection = {});
   void setStatus(QString status);
+  void scaleSelectedAnnotation(qreal factor);
   void updatePointerCursor();
 
   CaptureData capture_;
   Phase phase_ = Phase::Select;
-  Tool tool_ = Tool::Arrow;
+  Tool tool_ = Tool::Select;
   QRectF selection_;
   QPointF dragStart_;
+  QRectF originalSelection_;
+  QRectF cropDragImageRect_;
   QPointF cursor_;
   bool dragging_ = false;
   Interaction interaction_ = Interaction::None;
@@ -103,7 +131,8 @@ private:
   int selectedAnnotation_ = -1;
   int editingAnnotation_ = -1;
   Annotation originalAnnotation_;
-  QString status_ = QStringLiteral("Drag to select an area · Space selects a window");
+  QString status_ =
+      QStringLiteral("Drag to select an area · Space selects a window");
   QLineEdit *textEditor_ = nullptr;
   QPointF textPoint_;
   QElapsedTimer escapeTimer_;
