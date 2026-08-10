@@ -23,9 +23,16 @@
 #include <algorithm>
 #include <cmath>
 
+bool loadCaptureFonts() {
+  static const int fontId =
+      QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Neucha.ttf"));
+  return fontId >= 0;
+}
+
 QFont annotationTextFont(qreal size) {
-  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-  font.setWeight(QFont::DemiBold);
+  static_cast<void>(loadCaptureFonts());
+  QFont font(QStringLiteral("Neucha"));
+  font.setWeight(QFont::Normal);
   font.setItalic(false);
   font.setPixelSize(qRound(std::max<qreal>(18.0, size * 5.0)));
   return font;
@@ -147,6 +154,26 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
     return;
   }
 
+  if (annotation.kind == Annotation::Kind::Line) {
+    painter.drawLine(annotation.start, annotation.end);
+    return;
+  }
+
+  if (annotation.kind == Annotation::Kind::Freehand) {
+    if (annotation.points.size() < 2)
+      return;
+    QPainterPath stroke(annotation.points.first());
+    for (int index = 1; index + 1 < annotation.points.size(); ++index) {
+      const QPointF midpoint =
+          (annotation.points.at(index) + annotation.points.at(index + 1)) / 2.0;
+      stroke.quadTo(annotation.points.at(index), midpoint);
+    }
+    stroke.lineTo(annotation.points.last());
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(stroke);
+    return;
+  }
+
   if (annotation.kind == Annotation::Kind::Arrow) {
     const QLineF line(annotation.start, annotation.end);
     if (line.length() < 1.0)
@@ -183,12 +210,10 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   }
 
   const QFont font = annotationTextFont(annotation.size);
-  QPainterPath textPath;
-  textPath.addText(annotation.start, font, annotation.text);
-  painter.setBrush(annotation.color);
-  painter.setPen(QPen(QColor(0, 0, 0, 145), std::max<qreal>(1.0, annotation.size * 0.3),
-                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-  painter.drawPath(textPath);
+  painter.setFont(font);
+  painter.setPen(annotation.color);
+  painter.setBrush(Qt::NoBrush);
+  painter.drawText(annotation.start, annotation.text);
 }
 
 QRect pixelSelection(const CaptureData &capture, const QRectF &selection) {
@@ -220,7 +245,85 @@ void paintAnnotation(QPainter &painter, const Annotation &annotation) {
   drawAnnotation(painter, annotation);
 }
 
-bool captureFocusedMonitor(CaptureData &capture, QString &error) {
+void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
+                            BackgroundStyle backgroundStyle) {
+  if (backgroundStyle == BackgroundStyle::None)
+    return;
+
+  struct Blob {
+    QPointF center;
+    qreal radius;
+    QColor color;
+  };
+  QColor base;
+  std::array<Blob, 4> blobs;
+  if (backgroundStyle == BackgroundStyle::Aurora) {
+    base = QColor(QStringLiteral("#101827"));
+    blobs = {Blob{QPointF(bounds.left() + bounds.width() * 0.15,
+                          bounds.top() + bounds.height() * 0.18),
+                  bounds.width() * 0.75, QColor(QStringLiteral("#2dd4bf"))},
+             Blob{bounds.topRight(), bounds.width() * 0.78,
+                  QColor(QStringLiteral("#7c3aed"))},
+             Blob{QPointF(bounds.center().x(), bounds.bottom()),
+                  bounds.width() * 0.72, QColor(QStringLiteral("#2563eb"))},
+             Blob{bounds.bottomLeft(), bounds.width() * 0.55,
+                  QColor(QStringLiteral("#0f766e"))}};
+  } else if (backgroundStyle == BackgroundStyle::Sunset) {
+    base = QColor(QStringLiteral("#251328"));
+    blobs = {Blob{bounds.topLeft(), bounds.width() * 0.82,
+                  QColor(QStringLiteral("#f97316"))},
+             Blob{QPointF(bounds.right(), bounds.top() + bounds.height() * 0.2),
+                  bounds.width() * 0.7, QColor(QStringLiteral("#ec4899"))},
+             Blob{QPointF(bounds.center().x(), bounds.bottom()),
+                  bounds.width() * 0.75, QColor(QStringLiteral("#7c3aed"))},
+             Blob{bounds.bottomLeft(), bounds.width() * 0.5,
+                  QColor(QStringLiteral("#ef4444"))}};
+  } else if (backgroundStyle == BackgroundStyle::Lagoon) {
+    base = QColor(QStringLiteral("#071c2a"));
+    blobs = {Blob{QPointF(bounds.left() + bounds.width() * 0.12, bounds.top()),
+                  bounds.width() * 0.68, QColor(QStringLiteral("#06b6d4"))},
+             Blob{QPointF(bounds.right(), bounds.top() + bounds.height() * 0.25),
+                  bounds.width() * 0.75, QColor(QStringLiteral("#1d4ed8"))},
+             Blob{QPointF(bounds.center().x(), bounds.bottom()),
+                  bounds.width() * 0.75, QColor(QStringLiteral("#0f766e"))},
+             Blob{bounds.bottomLeft(), bounds.width() * 0.5,
+                  QColor(QStringLiteral("#22d3ee"))}};
+  } else {
+    base = QColor(QStringLiteral("#171225"));
+    blobs = {Blob{QPointF(bounds.left(), bounds.top() + bounds.height() * 0.15),
+                  bounds.width() * 0.7, QColor(QStringLiteral("#a855f7"))},
+             Blob{bounds.topRight(), bounds.width() * 0.72,
+                  QColor(QStringLiteral("#4f46e5"))},
+             Blob{bounds.bottomRight(), bounds.width() * 0.65,
+                  QColor(QStringLiteral("#db2777"))},
+             Blob{QPointF(bounds.left() + bounds.width() * 0.25, bounds.bottom()),
+                  bounds.width() * 0.62, QColor(QStringLiteral("#4338ca"))}};
+  }
+
+  painter.fillRect(bounds, base);
+  for (const Blob &blob : blobs) {
+    QRadialGradient gradient(blob.center, blob.radius);
+    QColor center = blob.color;
+    center.setAlpha(220);
+    QColor edge = blob.color;
+    edge.setAlpha(0);
+    gradient.setColorAt(0, center);
+    gradient.setColorAt(1, edge);
+    painter.fillRect(bounds, gradient);
+  }
+}
+
+void stopCaptureFreeze(QProcess &freeze) {
+  if (freeze.state() == QProcess::NotRunning)
+    return;
+  freeze.terminate();
+  if (!freeze.waitForFinished(300)) {
+    freeze.kill();
+    freeze.waitForFinished(300);
+  }
+}
+
+bool captureFocusedMonitor(CaptureData &capture, QString &error, QProcess *heldFreeze) {
   const ProcessResult monitors = runProcess(QStringLiteral("hyprctl"),
                                             {QStringLiteral("monitors"), QStringLiteral("-j")});
   if (!monitors.finished || monitors.exitCode != 0 ||
@@ -239,7 +342,8 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error) {
   const QString sourcePath = sourceFile.fileName();
   sourceFile.close();
 
-  QProcess freeze;
+  QProcess localFreeze;
+  QProcess &freeze = heldFreeze ? *heldFreeze : localFreeze;
   freeze.setProcessChannelMode(QProcess::ForwardedErrorChannel);
   freeze.start(QStringLiteral("hyprpicker"), {QStringLiteral("-r"), QStringLiteral("-z")});
   freeze.waitForStarted(500);
@@ -257,13 +361,11 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error) {
                   QString::number(capture.monitor.scale, 'g', 8), QStringLiteral("-g"),
                   grimGeometry, sourcePath},
                  {}, 10000);
-  freeze.terminate();
-  if (!freeze.waitForFinished(300)) {
-    freeze.kill();
-    freeze.waitForFinished(300);
-  }
+  if (!heldFreeze)
+    stopCaptureFreeze(freeze);
 
   if (!grim.finished || grim.exitCode != 0 || !capture.source.load(sourcePath)) {
+    stopCaptureFreeze(freeze);
     error = QStringLiteral("Screen capture failed: %1").arg(QString::fromUtf8(grim.error).trimmed());
     return false;
   }
@@ -271,6 +373,7 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error) {
   capture.preview = capture.source.scaled(geometry.size(), Qt::IgnoreAspectRatio,
                                           Qt::SmoothTransformation);
   if (capture.preview.isNull()) {
+    stopCaptureFreeze(freeze);
     error = QStringLiteral("Could not prepare screenshot preview");
     return false;
   }
@@ -283,7 +386,8 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error) {
 }
 
 QImage renderCapture(const CaptureData &capture, const QRectF &selection,
-                     const QVector<Annotation> &annotations, bool backgroundEnabled) {
+                     const QVector<Annotation> &annotations,
+                     BackgroundStyle backgroundStyle) {
   const QRect pixels = pixelSelection(capture, selection);
   if (pixels.isEmpty())
     return {};
@@ -304,8 +408,9 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
       cropped = cropped.scaled(impliedSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
   }
-  const int marginX = backgroundEnabled ? static_cast<int>(std::round(48.0 * scaleX)) : 0;
-  const int marginY = backgroundEnabled ? static_cast<int>(std::round(48.0 * scaleY)) : 0;
+  const bool hasBackground = backgroundStyle != BackgroundStyle::None;
+  const int marginX = hasBackground ? static_cast<int>(std::round(64.0 * scaleX)) : 0;
+  const int marginY = hasBackground ? static_cast<int>(std::round(64.0 * scaleY)) : 0;
   QImage output(cropped.width() + marginX * 2, cropped.height() + marginY * 2,
                 QImage::Format_ARGB32_Premultiplied);
   output.fill(Qt::transparent);
@@ -313,20 +418,25 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   QPainter painter(&output);
   painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);
-  if (backgroundEnabled) {
-    QLinearGradient gradient(0, 0, output.width(), output.height());
-    gradient.setColorAt(0.0, QColor(QStringLiteral("#1d2030")));
-    gradient.setColorAt(1.0, QColor(QStringLiteral("#364f78")));
-    painter.fillRect(output.rect(), gradient);
+  if (hasBackground) {
+    paintCaptureBackground(painter, output.rect(), backgroundStyle);
     const QRectF imageRect(marginX, marginY, cropped.width(), cropped.height());
-    for (int layer = 18; layer > 0; --layer) {
-      const qreal spread = layer * std::max(scaleX, scaleY) * 0.9;
-      QColor shadow(0, 0, 0, std::max(2, 26 - layer));
-      painter.setPen(Qt::NoPen);
-      painter.setBrush(shadow);
-      painter.drawRoundedRect(imageRect.adjusted(-spread, -spread + 10 * scaleY,
-                                                  spread, spread + 10 * scaleY),
-                              14 * scaleX + spread, 14 * scaleY + spread);
+    painter.setPen(Qt::NoPen);
+    for (int layer = 24; layer > 0; --layer) {
+      const qreal spread = layer * std::max(scaleX, scaleY) * 0.85;
+      painter.setBrush(QColor(0, 0, 0, 2 + (24 - layer) / 5));
+      painter.drawRoundedRect(
+          imageRect.adjusted(-spread, -spread + 14 * scaleY, spread,
+                             spread + 14 * scaleY),
+          16 * scaleX + spread, 16 * scaleY + spread);
+    }
+    for (int layer = 12; layer > 0; --layer) {
+      const qreal spread = layer * std::max(scaleX, scaleY) * 0.45;
+      painter.setBrush(QColor(0, 0, 0, 3 + (12 - layer)));
+      painter.drawRoundedRect(
+          imageRect.adjusted(-spread, -spread + 8 * scaleY, spread,
+                             spread + 8 * scaleY),
+          14 * scaleX + spread, 14 * scaleY + spread);
     }
     QPainterPath clip;
     clip.addRoundedRect(imageRect, 14 * scaleX, 14 * scaleY);

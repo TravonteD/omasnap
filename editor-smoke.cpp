@@ -5,10 +5,13 @@
 #include <QDir>
 #include <QDebug>
 #include <QPainter>
+#include <QWheelEvent>
 #include <QtTest/QTest>
 
 int main(int argc, char **argv) {
   QApplication application(argc, argv);
+  if (!loadCaptureFonts())
+    return 17;
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath()).filePath(QStringLiteral("omarchy-native-smoke"));
@@ -77,16 +80,71 @@ int main(int argc, char **argv) {
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 250));
   QTest::mouseMove(&editor, QPoint(570, 350), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(570, 350));
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::ArrowCursor)
+    return 26;
+  QTest::keyClick(&editor, Qt::Key_L);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(260, 210));
+  QTest::mouseMove(&editor, QPoint(520, 265), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(520, 265));
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::ArrowCursor)
+    return 27;
+  QTest::keyClick(&editor, Qt::Key_F);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(270, 390));
+  QTest::mouseMove(&editor, QPoint(330, 360), 10);
+  QTest::mouseMove(&editor, QPoint(390, 410), 10);
+  QTest::mouseMove(&editor, QPoint(460, 370), 10);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(530, 420));
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::ArrowCursor)
+    return 28;
   QTest::keyClick(&editor, Qt::Key_2);
   QTest::keyClick(&editor, Qt::Key_C);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(470, 300));
   QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(352, 133));
+  QWheelEvent textSizeWheel(QPointF(360, 320), QPointF(360, 320), {}, {0, -120},
+                           Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(&editor, &textSizeWheel);
+  application.processEvents();
+  if (!editor.grab().save(outputRoot + QStringLiteral("-text-sizes.png"), "PNG"))
+    return 18;
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(360, 320));
   QTest::keyClicks(QApplication::focusWidget(), QStringLiteral("Inline text"));
-  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
-  QTest::keyClick(&editor, Qt::Key_B);
   application.processEvents();
-  QTest::mouseMove(&editor, QPoint(91, 92), 20);
+  if (!editor.grab().save(outputRoot + QStringLiteral("-text-inline.png"), "PNG"))
+    return 19;
+  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+  application.processEvents();
+  if (!editor.grab().save(outputRoot + QStringLiteral("-text-committed.png"), "PNG"))
+    return 20;
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 300));
+  QTest::mouseMove(&editor, QPoint(420, 315), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(420, 315));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(590, 365));
+  QTest::mouseMove(&editor, QPoint(620, 380), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 380));
+  application.processEvents();
+  if (!editor.grab().save(outputRoot + QStringLiteral("-vector-selected.png"), "PNG"))
+    return 21;
+  QTest::mouseDClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(380, 330));
+  if (QApplication::focusWidget() != nullptr &&
+      QApplication::focusWidget() != &editor) {
+    QTest::keyClicks(QApplication::focusWidget(), QStringLiteral("Edited Neucha"));
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+  } else {
+    return 22;
+  }
+  QTest::keyClick(&editor, Qt::Key_B);
+  QTest::mouseMove(&editor, QPoint(398, 92), 20);
+  application.processEvents();
+  if (!editor.grab().save(outputRoot + QStringLiteral("-palette.png"), "PNG"))
+    return 14;
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(480, 134));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(320, 200));
+  QTest::mouseMove(&editor, QPoint(198, 92), 20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor)
     return 12;
@@ -95,17 +153,55 @@ int main(int argc, char **argv) {
       !keyboardWindowUi.save(outputRoot + QStringLiteral("-window-keyboard.png"), "PNG"))
     return 2;
 
+  CaptureEditor fullscreenEditor(capture);
+  fullscreenEditor.resize(800, 600);
+  fullscreenEditor.show();
+  application.processEvents();
+  QTest::keyClick(&fullscreenEditor, Qt::Key_A, Qt::ControlModifier);
+  application.processEvents();
+
+  CaptureData nativePreviewCapture = capture;
+  nativePreviewCapture.monitor.scale = 2.0;
+  nativePreviewCapture.monitor.pixelSize = {1600, 1200};
+  nativePreviewCapture.source = QImage(1600, 1200, QImage::Format_RGB32);
+  nativePreviewCapture.source.fill(QColor(QStringLiteral("#123456")));
+  nativePreviewCapture.preview = QImage(800, 600, QImage::Format_RGB32);
+  nativePreviewCapture.preview.fill(QColor(QStringLiteral("#ff00ff")));
+  CaptureEditor nativePreviewEditor(nativePreviewCapture);
+  nativePreviewEditor.resize(800, 600);
+  nativePreviewEditor.show();
+  application.processEvents();
+  QTest::keyClick(&nativePreviewEditor, Qt::Key_A, Qt::ControlModifier);
+  application.processEvents();
+  const QImage nativePreviewUi = nativePreviewEditor.grab().toImage();
+  if (nativePreviewUi.pixelColor(400, 300) != QColor(QStringLiteral("#123456")) ||
+      !nativePreviewUi.save(outputRoot + QStringLiteral("-native-preview.png"), "PNG"))
+    return 23;
+  if (!fullscreenEditor.grab().save(
+          outputRoot + QStringLiteral("-fullscreen-editor.png"), "PNG"))
+    return 16;
+
   QVector<Annotation> annotations;
   annotations.push_back({Annotation::Kind::Arrow, {50, 60}, {390, 150}, {},
-                         QColor(QStringLiteral("#ff375f")), 5, 0});
+                         QColor(QStringLiteral("#ff375f")), 5, 0, {}});
+  annotations.push_back({Annotation::Kind::Line, {40, 260}, {430, 250}, {},
+                         QColor(QStringLiteral("#bf5af2")), 4, 0, {}});
+  Annotation freehand;
+  freehand.kind = Annotation::Kind::Freehand;
+  freehand.color = QColor(QStringLiteral("#ffd60a"));
+  freehand.size = 4;
+  freehand.points = {{40, 170}, {110, 145}, {165, 185}, {225, 150}};
+  annotations.push_back(std::move(freehand));
   annotations.push_back({Annotation::Kind::Marker, {260, 180}, {}, {},
-                         QColor(QStringLiteral("#ff9f0a")), 5, 1});
+                         QColor(QStringLiteral("#ff9f0a")), 5, 1, {}});
   annotations.push_back({Annotation::Kind::Rectangle, {30, 30}, {450, 230}, {},
-                         QColor(QStringLiteral("#30d158")), 4, 0});
+                         QColor(QStringLiteral("#30d158")), 4, 0, {}});
   annotations.push_back({Annotation::Kind::Text, {80, 210}, {},
-                         QStringLiteral("Qt C++"), QColor(QStringLiteral("#0a84ff")), 4, 0});
-  const QImage rendered = renderCapture(capture, QRectF(100, 100, 500, 300), annotations, true);
-  if (rendered.isNull() || rendered.size() != QSize(596, 396) ||
+                         QStringLiteral("Qt C++"), QColor(QStringLiteral("#0a84ff")), 4, 0,
+                         {}});
+  const QImage rendered = renderCapture(capture, QRectF(100, 100, 500, 300), annotations,
+                                        BackgroundStyle::Aurora);
+  if (rendered.isNull() || rendered.size() != QSize(628, 428) ||
       !rendered.save(outputRoot + QStringLiteral("-render.png"), "PNG"))
     return 3;
 
@@ -114,10 +210,16 @@ int main(int argc, char **argv) {
   highDpiCapture.monitor.pixelSize = {1600, 1200};
   highDpiCapture.source =
       capture.source.scaled(1500, 1125, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-  const QImage highDpiRendered =
-      renderCapture(highDpiCapture, QRectF(100, 100, 500, 300), {}, false);
+  const QImage highDpiRendered = renderCapture(
+      highDpiCapture, QRectF(100, 100, 500, 300), {}, BackgroundStyle::None);
   if (highDpiRendered.size() != QSize(1000, 600))
     return 13;
+  const QImage fullHighDpi =
+      renderCapture(highDpiCapture, QRectF(0, 0, 800, 600), {},
+                    BackgroundStyle::None);
+  if (fullHighDpi.size() != QSize(1600, 1200) ||
+      !fullHighDpi.save(outputRoot + QStringLiteral("-fullscreen-hidpi.png"), "PNG"))
+    return 15;
 
   if (qEnvironmentVariableIsSet("OMARCHY_CAPTURE_SMOKE_COPY")) {
     QString clipboardError;
@@ -142,5 +244,14 @@ int main(int argc, char **argv) {
   QString ocrError;
   if (!recognizeText(ocrImage, ocrError).contains(QStringLiteral("OCR smoke test 42")))
     return 5;
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::keyClick(&editor, Qt::Key_Escape);
+  application.processEvents();
+  if (!editor.isVisible())
+    return 24;
+  QTest::keyClick(&editor, Qt::Key_Escape);
+  application.processEvents();
+  if (editor.isVisible())
+    return 25;
   return 0;
 }

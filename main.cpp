@@ -1,19 +1,25 @@
 #include "capture.hpp"
 #include "editor.hpp"
+#include <LayerShellQt/Window>
 
 #include <QApplication>
 #include <QDir>
 #include <QGuiApplication>
 #include <QLockFile>
+#include <QProcess>
 #include <QScreen>
 #include <QStandardPaths>
 #include <QWindow>
+#include <QTimer>
 
 int main(int argc, char **argv) {
   QCoreApplication::setApplicationName(QStringLiteral("omarchy-capture-editor"));
   QCoreApplication::setOrganizationName(QStringLiteral("Omarchy"));
+  qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
   QGuiApplication::setDesktopFileName(QStringLiteral("omarchy-capture-editor"));
   QApplication application(argc, argv);
+  if (!loadCaptureFonts())
+    return 1;
   application.setQuitOnLastWindowClosed(true);
 
   QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
@@ -26,7 +32,8 @@ int main(int argc, char **argv) {
 
   CaptureData capture;
   QString error;
-  if (!captureFocusedMonitor(capture, error)) {
+  QProcess freeze;
+  if (!captureFocusedMonitor(capture, error, &freeze)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
@@ -48,9 +55,35 @@ int main(int argc, char **argv) {
   CaptureEditor editor(std::move(capture));
   editor.setScreen(targetScreen);
   editor.setGeometry(targetScreen->geometry());
-  editor.showFullScreen();
-  editor.raise();
-  editor.activateWindow();
+  editor.winId();
+  QWindow *window = editor.windowHandle();
+  LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
+  if (!window || !layerWindow) {
+    stopCaptureFreeze(freeze);
+    qCritical() << "Could not create capture overlay layer";
+    return 1;
+  }
+  layerWindow->setScope(QStringLiteral("omarchy-capture-editor"));
+  layerWindow->setScreen(targetScreen);
+  layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
+  LayerShellQt::Window::Anchors anchors;
+  anchors.setFlag(LayerShellQt::Window::AnchorTop);
+  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
+  anchors.setFlag(LayerShellQt::Window::AnchorLeft);
+  anchors.setFlag(LayerShellQt::Window::AnchorRight);
+  layerWindow->setAnchors(anchors);
+  layerWindow->setExclusiveZone(-1);
+  layerWindow->setKeyboardInteractivity(
+      LayerShellQt::Window::KeyboardInteractivityExclusive);
+  layerWindow->setActivateOnShow(true);
+  editor.show();
   editor.setFocus(Qt::ActiveWindowFocusReason);
-  return application.exec();
+
+  // Keep hyprpicker's frozen overlay alive until this layer has been committed
+  // for several refreshes. The two identical frames overlap; the workspace is
+  // never exposed between capture and editor mapping.
+  QTimer::singleShot(50, &application, [&freeze] { stopCaptureFreeze(freeze); });
+  const int result = application.exec();
+  stopCaptureFreeze(freeze);
+  return result;
 }

@@ -2,6 +2,7 @@
 
 #include "capture.hpp"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QLineEdit>
 #include <QWidget>
@@ -20,17 +21,19 @@ protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
   void keyPressEvent(QKeyEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;
+  void mouseDoubleClickEvent(QMouseEvent *event) override;
   void mousePressEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
   void paintEvent(QPaintEvent *event) override;
   void wheelEvent(QWheelEvent *event) override;
 
 public:
-  enum class Tool { Arrow, Marker, Rectangle, Text };
+  enum class Tool { Select, Arrow, Line, Freehand, Marker, Rectangle, Text, Ocr };
 
 private:
   enum class Phase { Select, Edit };
   enum class OutputMode { Copy, Save, Both };
+  enum class Interaction { None, Move, ResizeStart, ResizeEnd };
 
   struct ToolbarButton {
     QRectF rect;
@@ -45,46 +48,65 @@ private:
     QString error;
   };
 
+  [[nodiscard]] QRectF annotationBounds(const Annotation &annotation) const;
+  [[nodiscard]] int annotationAt(const QPointF &point) const;
   [[nodiscard]] QRectF normalizedSelection(const QPointF &first, const QPointF &second) const;
+  [[nodiscard]] QRectF colorPaletteRect() const;
+  [[nodiscard]] QRectF customColorPanelRect() const;
+  [[nodiscard]] QRectF textSizePanelRect() const;
   [[nodiscard]] QRectF editImageRect() const;
   [[nodiscard]] qreal editScale() const;
   [[nodiscard]] QPointF toAnnotationPoint(const QPointF &position) const;
+  [[nodiscard]] QRectF sourceRect(const QRectF &logicalRect) const;
   [[nodiscard]] int windowAt(const QPointF &position) const;
   [[nodiscard]] int windowInDirection(int current, int key) const;
   [[nodiscard]] QVector<ToolbarButton> toolbarButtons() const;
   [[nodiscard]] QColor annotationColor() const;
 
   void acceptText();
-  void beginText(const QPointF &point);
+  void applyCustomColor(const QPointF &position);
+  void beginText(const QPointF &point, int annotationIndex = -1);
   void chooseWindow(int index);
   void selectWindowInDirection(int key);
   void finish(OutputMode mode);
+  void handleEscape();
   void handleToolbar(const QString &action);
   void paintEdit(QPainter &painter);
   void paintSelect(QPainter &painter);
-  void runOcr();
+  void runOcr(const QRectF &localSelection = {});
   void setStatus(QString status);
   void updatePointerCursor();
 
   CaptureData capture_;
-  QImage fullscreenPreview_;
   Phase phase_ = Phase::Select;
   Tool tool_ = Tool::Arrow;
   QRectF selection_;
   QPointF dragStart_;
   QPointF cursor_;
   bool dragging_ = false;
+  Interaction interaction_ = Interaction::None;
+  QVector<QPointF> freehandPoints_;
   bool windowMode_ = false;
-  bool backgroundEnabled_ = false;
+  BackgroundStyle backgroundStyle_ = BackgroundStyle::None;
   bool busy_ = false;
+  bool colorPaletteOpen_ = false;
+  bool customColorPickerOpen_ = false;
+  bool usingCustomColor_ = false;
   int hoveredWindow_ = -1;
   int colorIndex_ = 0;
+  QColor customColor_ = QColor(QStringLiteral("#ff375f"));
+  qreal customHue_ = 0.98;
   int nextMarker_ = 1;
   qreal annotationSize_ = 4.0;
+  int textSizeIndex_ = 1;
   QVector<Annotation> annotations_;
+  int selectedAnnotation_ = -1;
+  int editingAnnotation_ = -1;
+  Annotation originalAnnotation_;
   QString status_ = QStringLiteral("Drag to select an area · Space selects a window");
   QLineEdit *textEditor_ = nullptr;
   QPointF textPoint_;
+  QElapsedTimer escapeTimer_;
   QColor textColor_;
   qreal textSize_ = 4.0;
   QFutureWatcher<OcrResult> ocrWatcher_;

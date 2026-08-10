@@ -3,6 +3,7 @@ project(omarchy-capture-editor LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
+find_package(LayerShellQt REQUIRED)
 pkg_check_modules(WaylandClient REQUIRED IMPORTED_TARGET wayland-client)
 find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 
@@ -35,6 +36,11 @@ qt_add_executable(omarchy-capture-editor
   editor.cpp
   editor.hpp
 )
+qt_add_resources(omarchy-capture-editor "capture-fonts"
+  PREFIX "/fonts"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
+)
 
 target_include_directories(omarchy-capture-editor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_features(omarchy-capture-editor PRIVATE cxx_std_23)
@@ -44,6 +50,7 @@ target_link_libraries(omarchy-capture-editor PRIVATE
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
+  LayerShellQt::Interface
   PkgConfig::WaylandClient
 )
 
@@ -55,6 +62,11 @@ qt_add_executable(omarchy-capture-editor-smoke
   ${PROTOCOL_SOURCES}
   editor.cpp
   editor.hpp
+)
+qt_add_resources(omarchy-capture-editor-smoke "capture-fonts-smoke"
+  PREFIX "/fonts"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
 )
 target_include_directories(omarchy-capture-editor-smoke PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_features(omarchy-capture-editor-smoke PRIVATE cxx_std_23)
@@ -69,3 +81,7 @@ target_link_libraries(omarchy-capture-editor-smoke PRIVATE
 )
 
 install(TARGETS omarchy-capture-editor RUNTIME DESTINATION bin)
+install(FILES assets/OFL.txt
+  DESTINATION share/licenses/omarchy-capture-editor
+  RENAME Neucha-OFL.txt
+)

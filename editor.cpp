@@ -25,17 +25,32 @@
 namespace {
 constexpr std::array<const char *, 6> kColorNames{
     "#ff375f", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff", "#bf5af2"};
+constexpr std::array<qreal, 3> kTextSizes{2.0, 5.0, 9.0};
+constexpr std::array<const char *, 3> kTextSizeNames{"S", "M", "L"};
+
+bool hasEndpointHandles(Annotation::Kind kind) {
+  return kind == Annotation::Kind::Arrow || kind == Annotation::Kind::Line ||
+         kind == Annotation::Kind::Rectangle;
+}
 
 QString toolAction(CaptureEditor::Tool tool) {
   switch (tool) {
+  case CaptureEditor::Tool::Select:
+    return QStringLiteral("tool-select");
   case CaptureEditor::Tool::Arrow:
     return QStringLiteral("tool-arrow");
+  case CaptureEditor::Tool::Line:
+    return QStringLiteral("tool-line");
+  case CaptureEditor::Tool::Freehand:
+    return QStringLiteral("tool-freehand");
   case CaptureEditor::Tool::Marker:
     return QStringLiteral("tool-marker");
   case CaptureEditor::Tool::Rectangle:
     return QStringLiteral("tool-rectangle");
   case CaptureEditor::Tool::Text:
     return QStringLiteral("tool-text");
+  case CaptureEditor::Tool::Ocr:
+    return QStringLiteral("tool-ocr");
   }
   return {};
 }
@@ -69,10 +84,26 @@ void drawToolbarIcon(QPainter &painter, const QRectF &bounds, const QString &act
   painter.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   painter.setBrush(Qt::NoBrush);
 
-  if (action == QStringLiteral("tool-arrow")) {
+  if (action == QStringLiteral("tool-select")) {
+    QPainterPath pointer;
+    pointer.moveTo(5, 4);
+    pointer.lineTo(17, 15);
+    pointer.lineTo(12, 16);
+    pointer.lineTo(9, 21);
+    pointer.closeSubpath();
+    painter.drawPath(pointer);
+  } else if (action == QStringLiteral("tool-arrow")) {
     painter.drawLine(QPointF(7, 17), QPointF(17, 7));
     painter.drawLine(QPointF(7, 7), QPointF(17, 7));
     painter.drawLine(QPointF(17, 7), QPointF(17, 17));
+  } else if (action == QStringLiteral("tool-line")) {
+    painter.drawLine(QPointF(5, 19), QPointF(19, 5));
+  } else if (action == QStringLiteral("tool-freehand")) {
+    QPainterPath stroke;
+    stroke.moveTo(4, 16);
+    stroke.cubicTo(7, 5, 10, 20, 14, 11);
+    stroke.cubicTo(17, 5, 18, 11, 21, 7);
+    painter.drawPath(stroke);
   } else if (action == QStringLiteral("tool-marker")) {
     painter.drawEllipse(QPointF(12, 12), 8, 8);
     QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
@@ -86,7 +117,7 @@ void drawToolbarIcon(QPainter &painter, const QRectF &bounds, const QString &act
     painter.drawLine(QPointF(5, 5), QPointF(19, 5));
     painter.drawLine(QPointF(12, 5), QPointF(12, 19));
     painter.drawLine(QPointF(9, 19), QPointF(15, 19));
-  } else if (action == QStringLiteral("ocr")) {
+  } else if (action == QStringLiteral("tool-ocr")) {
     QPainterPath path;
     path.moveTo(9, 4);
     path.lineTo(5, 4);
@@ -107,6 +138,21 @@ void drawToolbarIcon(QPainter &painter, const QRectF &bounds, const QString &act
     path.moveTo(8, 17);
     path.lineTo(13, 17);
     painter.drawPath(path);
+  } else if (action == QStringLiteral("custom-color")) {
+    QConicalGradient gradient(QPointF(12, 12), 90);
+    gradient.setColorAt(0.0, QColor(QStringLiteral("#ff375f")));
+    gradient.setColorAt(0.17, QColor(QStringLiteral("#ff9f0a")));
+    gradient.setColorAt(0.34, QColor(QStringLiteral("#ffd60a")));
+    gradient.setColorAt(0.51, QColor(QStringLiteral("#30d158")));
+    gradient.setColorAt(0.68, QColor(QStringLiteral("#0a84ff")));
+    gradient.setColorAt(0.85, QColor(QStringLiteral("#bf5af2")));
+    gradient.setColorAt(1.0, QColor(QStringLiteral("#ff375f")));
+    painter.setPen(QPen(color, 1.5));
+    painter.setBrush(gradient);
+    painter.drawEllipse(QPointF(12, 12), 8, 8);
+    painter.setPen(QPen(Qt::white, 1.5, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(12, 8), QPointF(12, 16));
+    painter.drawLine(QPointF(8, 12), QPointF(16, 12));
   } else if (action == QStringLiteral("background")) {
     painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2);
     painter.drawEllipse(QPointF(8, 9), 1.5, 1.5);
@@ -183,10 +229,59 @@ void drawInstantTooltip(QPainter &painter, const QRect &bounds, const QRectF &an
   painter.setPen(Qt::white);
   painter.drawText(pill, Qt::AlignCenter, text);
 }
+
+void drawHotkeyLegend(QPainter &painter, const QRect &bounds, const QPointF &cursor,
+                      const QVector<QPair<QString, QString>> &entries) {
+  if (entries.isEmpty())
+    return;
+  constexpr int columns = 2;
+  const int rows = (entries.size() + columns - 1) / columns;
+  const qreal width = 414;
+  const qreal height = rows * 19 + 24;
+  QRectF panel(bounds.width() - width - 14, 14, width, height);
+  if (panel.adjusted(-28, -28, 28, 28).contains(cursor))
+    panel.moveLeft(14);
+
+  painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
+  painter.setBrush(QColor(13, 15, 20, 224));
+  painter.drawRoundedRect(panel, 11, 11);
+  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  font.setPixelSize(11);
+  painter.setFont(font);
+  const qreal columnWidth = (panel.width() - 24) / columns;
+  for (int index = 0; index < entries.size(); ++index) {
+    const int column = index / rows;
+    const int row = index % rows;
+    const qreal x = panel.left() + 12 + column * columnWidth;
+    const qreal y = panel.top() + 12 + row * 19;
+    painter.setPen(QColor(QStringLiteral("#a9b6cb")));
+    painter.drawText(QRectF(x, y, 70, 18), Qt::AlignLeft | Qt::AlignVCenter,
+                     entries.at(index).first);
+    painter.setPen(QColor(QStringLiteral("#f5f5f7")));
+    painter.drawText(QRectF(x + 72, y, columnWidth - 76, 18),
+                     Qt::AlignLeft | Qt::AlignVCenter, entries.at(index).second);
+  }
+}
+
+QString backgroundName(BackgroundStyle style) {
+  switch (style) {
+  case BackgroundStyle::None:
+    return QStringLiteral("None");
+  case BackgroundStyle::Aurora:
+    return QStringLiteral("Aurora");
+  case BackgroundStyle::Sunset:
+    return QStringLiteral("Sunset");
+  case BackgroundStyle::Lagoon:
+    return QStringLiteral("Lagoon");
+  case BackgroundStyle::Violet:
+    return QStringLiteral("Violet");
+  }
+  return {};
+}
 } // namespace
 
 CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
-    : QWidget(parent), capture_(std::move(capture)), fullscreenPreview_(capture_.preview) {
+    : QWidget(parent), capture_(std::move(capture)) {
   setWindowTitle(QStringLiteral("Omarchy Capture Editor"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
   setAttribute(Qt::WA_OpaquePaintEvent);
@@ -206,6 +301,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, QWidget *parent)
   textEditor_ = new QLineEdit(this);
   textEditor_->hide();
   textEditor_->setFrame(false);
+  textEditor_->setTextMargins(0, 0, 0, 0);
   textEditor_->setStyleSheet(QStringLiteral(
       "QLineEdit { color: #ff375f; background: transparent; border: none; padding: 0;"
       " selection-background-color: #0a84ff; }"));
@@ -244,10 +340,7 @@ bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
     if (key->key() == Qt::Key_Escape) {
-      textEditor_->clear();
-      textEditor_->hide();
-      setFocus(Qt::OtherFocusReason);
-      update();
+      handleEscape();
       return true;
     }
   }
@@ -255,7 +348,135 @@ bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
 }
 
 QColor CaptureEditor::annotationColor() const {
+  if (usingCustomColor_)
+    return customColor_;
   return QColor(QString::fromLatin1(kColorNames.at(static_cast<std::size_t>(colorIndex_))));
+}
+QRectF CaptureEditor::annotationBounds(const Annotation &annotation) const {
+  if (annotation.kind == Annotation::Kind::Marker) {
+    const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
+    return {annotation.start.x() - diameter / 2.0,
+            annotation.start.y() - diameter / 2.0, diameter, diameter};
+  }
+  if (annotation.kind == Annotation::Kind::Text) {
+    const QFontMetricsF metrics(annotationTextFont(annotation.size));
+    return {annotation.start.x(), annotation.start.y() - metrics.ascent(),
+            metrics.horizontalAdvance(annotation.text), metrics.height()};
+  }
+  if (annotation.kind == Annotation::Kind::Freehand) {
+    if (annotation.points.isEmpty())
+      return {};
+    qreal left = annotation.points.first().x();
+    qreal right = left;
+    qreal top = annotation.points.first().y();
+    qreal bottom = top;
+    for (const QPointF &point : annotation.points) {
+      left = std::min(left, point.x());
+      right = std::max(right, point.x());
+      top = std::min(top, point.y());
+      bottom = std::max(bottom, point.y());
+    }
+    return {QPointF(left, top), QPointF(right, bottom)};
+  }
+  return QRectF(annotation.start, annotation.end).normalized();
+}
+
+int CaptureEditor::annotationAt(const QPointF &point) const {
+  for (int index = annotations_.size() - 1; index >= 0; --index) {
+    const Annotation &annotation = annotations_.at(index);
+    if (annotation.kind == Annotation::Kind::Arrow ||
+        annotation.kind == Annotation::Kind::Line) {
+      const QPointF delta = annotation.end - annotation.start;
+      const qreal lengthSquared =
+          delta.x() * delta.x() + delta.y() * delta.y();
+      if (lengthSquared <= 0)
+        continue;
+      const QPointF fromStart = point - annotation.start;
+      const qreal t = std::clamp(
+          (fromStart.x() * delta.x() + fromStart.y() * delta.y()) /
+              lengthSquared,
+          0.0, 1.0);
+      const QPointF closest = annotation.start + delta * t;
+      if (QLineF(point, closest).length() <=
+          std::max<qreal>(8.0, annotation.size + 4.0))
+        return index;
+    } else if (annotation.kind == Annotation::Kind::Freehand) {
+      for (int pointIndex = 1; pointIndex < annotation.points.size(); ++pointIndex) {
+        const QLineF segment(annotation.points.at(pointIndex - 1),
+                             annotation.points.at(pointIndex));
+        if (segment.length() <= 0)
+          continue;
+        const QPointF delta = segment.p2() - segment.p1();
+        const QPointF fromStart = point - segment.p1();
+        const qreal lengthSquared =
+            delta.x() * delta.x() + delta.y() * delta.y();
+        const qreal t = std::clamp(
+            (fromStart.x() * delta.x() + fromStart.y() * delta.y()) /
+                lengthSquared,
+            0.0, 1.0);
+        const QPointF closest = segment.p1() + delta * t;
+        if (QLineF(point, closest).length() <=
+            std::max<qreal>(8.0, annotation.size + 4.0))
+          return index;
+      }
+    } else if (annotationBounds(annotation).adjusted(-7, -7, 7, 7).contains(point)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+QRectF CaptureEditor::colorPaletteRect() const {
+  constexpr qreal toolbarWidth = 600;
+  constexpr qreal buttonHeight = 36;
+  const qreal toolbarX = (width() - toolbarWidth) / 2.0;
+  const qreal toolbarY =
+      std::max<qreal>(10, editImageRect().top() - buttonHeight - 10);
+  const QRectF anchor(toolbarX + 280, toolbarY, 36, buttonHeight);
+  const qreal paletteWidth = 204;
+  const qreal x = std::clamp(anchor.center().x() - paletteWidth / 2.0, 8.0,
+                             std::max(8.0, width() - paletteWidth - 8.0));
+  return {x, anchor.bottom() + 4, paletteWidth, 36};
+}
+
+QRectF CaptureEditor::customColorPanelRect() const {
+  QRectF panel(colorPaletteRect().left(), colorPaletteRect().bottom() + 6, 220, 150);
+  if (panel.right() > width() - 8)
+    panel.moveRight(width() - 8);
+  if (panel.bottom() > height() - 8)
+    panel.moveBottom(height() - 8);
+  return panel;
+}
+
+QRectF CaptureEditor::textSizePanelRect() const {
+  constexpr qreal toolbarWidth = 600;
+  constexpr qreal buttonHeight = 36;
+  const qreal toolbarX = (width() - toolbarWidth) / 2.0;
+  const qreal toolbarY =
+      std::max<qreal>(10, editImageRect().top() - buttonHeight - 10);
+  const QRectF anchor(toolbarX + 240, toolbarY, 36, buttonHeight);
+  return {anchor.center().x() - 51, anchor.bottom() + 6, 102, 34};
+}
+
+void CaptureEditor::applyCustomColor(const QPointF &position) {
+  const QRectF panel = customColorPanelRect();
+  const QRectF field = panel.adjusted(12, 12, -36, -12);
+  const QRectF hue(panel.right() - 26, panel.top() + 12, 14, panel.height() - 24);
+  qreal saturation = customColor_.hsvSaturationF();
+  qreal value = customColor_.valueF();
+  if (hue.contains(position)) {
+    customHue_ = std::clamp((position.y() - hue.top()) / hue.height(), 0.0, 1.0);
+  } else if (field.contains(position)) {
+    saturation = std::clamp((position.x() - field.left()) / field.width(), 0.0, 1.0);
+    value = 1.0 - std::clamp((position.y() - field.top()) / field.height(), 0.0, 1.0);
+  } else {
+    return;
+  }
+  customColor_ = QColor::fromHsvF(customHue_, saturation, value);
+  usingCustomColor_ = true;
+  if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size())
+    annotations_[selectedAnnotation_].color = customColor_;
+  update();
 }
 
 QRectF CaptureEditor::normalizedSelection(const QPointF &first, const QPointF &second) const {
@@ -287,6 +508,17 @@ QPointF CaptureEditor::toAnnotationPoint(const QPointF &position) const {
   const qreal scale = std::max<qreal>(editScale(), 0.001);
   return {std::clamp((position.x() - image.left()) / scale, 0.0, selection_.width()),
           std::clamp((position.y() - image.top()) / scale, 0.0, selection_.height())};
+}
+
+QRectF CaptureEditor::sourceRect(const QRectF &logicalRect) const {
+  if (capture_.preview.isNull() || capture_.source.isNull())
+    return {};
+  const qreal scaleX =
+      capture_.source.width() / static_cast<qreal>(capture_.preview.width());
+  const qreal scaleY =
+      capture_.source.height() / static_cast<qreal>(capture_.preview.height());
+  return {logicalRect.x() * scaleX, logicalRect.y() * scaleY,
+          logicalRect.width() * scaleX, logicalRect.height() * scaleY};
 }
 
 int CaptureEditor::windowAt(const QPointF &position) const {
@@ -341,8 +573,7 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   QVector<ToolbarButton> buttons;
   const qreal height = 36;
   const qreal gap = 4;
-  const qreal total = 4 * (36 + gap) + 6 * (24 + gap) + (42 + gap) +
-                      5 * (36 + gap) + (40 + gap) + 36;
+  const qreal total = 600;
   qreal x = (width() - total) / 2.0;
   const qreal y = std::max<qreal>(10, editImageRect().top() - height - 10);
   auto add = [&](qreal buttonWidth, QString action, QString label, QString tooltip,
@@ -352,29 +583,77 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
     x += buttonWidth + gap;
   };
 
-  add(36, QStringLiteral("tool-arrow"), {}, QStringLiteral("Arrow · A"));
-  add(36, QStringLiteral("tool-marker"), {}, QStringLiteral("Number marker · C"));
+  add(36, QStringLiteral("tool-select"), {}, QStringLiteral("Select and edit layer · V"));
+  add(36, QStringLiteral("tool-arrow"), {},
+      QStringLiteral("Arrow · A · Size %1 · Wheel").arg(qRound(annotationSize_)));
+  add(36, QStringLiteral("tool-line"), {},
+      QStringLiteral("Line · L · Size %1 · Wheel").arg(qRound(annotationSize_)));
+  add(36, QStringLiteral("tool-freehand"), {},
+      QStringLiteral("Freehand · F · Size %1 · Wheel").arg(qRound(annotationSize_)));
+  add(36, QStringLiteral("tool-marker"), {},
+      QStringLiteral("Number marker · C · Size %1 · Wheel").arg(qRound(annotationSize_)));
   add(36, QStringLiteral("tool-rectangle"), {}, QStringLiteral("Rectangle · R"));
-  add(36, QStringLiteral("tool-text"), {}, QStringLiteral("Text · T"));
-  for (int index = 0; index < 6; ++index) {
-    add(24, QStringLiteral("color-%1").arg(index), {},
-        QStringLiteral("Color · %1").arg(index + 1),
-        QColor(QString::fromLatin1(kColorNames.at(static_cast<std::size_t>(index)))));
-  }
-  add(42, QStringLiteral("size"), QString::number(qRound(annotationSize_)),
-      QStringLiteral("Annotation size · Wheel"));
-  add(36, QStringLiteral("ocr"), {}, QStringLiteral("Copy text with OCR · O"));
-  add(36, QStringLiteral("background"), {}, QStringLiteral("Backdrop and shadow · B"));
+  add(36, QStringLiteral("tool-text"), {},
+      QStringLiteral("Neucha text · T · %1 · Wheel")
+          .arg(QString::fromLatin1(
+              kTextSizeNames.at(static_cast<std::size_t>(textSizeIndex_)))));
+  add(36, QStringLiteral("palette"), {}, QStringLiteral("Annotation color"),
+      annotationColor());
+  add(36, QStringLiteral("tool-ocr"), {}, QStringLiteral("Draw around text to copy · O"));
+  add(36, QStringLiteral("background"), {}, QStringLiteral("Cycle backdrop · B"));
   add(36, QStringLiteral("undo"), {}, QStringLiteral("Undo · Ctrl+Z"));
-  add(36, QStringLiteral("copy"), {}, QStringLiteral("Copy · Enter"));
-  add(40, QStringLiteral("both"), {}, QStringLiteral("Copy and save · Shift+Enter"));
-  add(36, QStringLiteral("save"), {}, QStringLiteral("Save · Ctrl+S"));
-  add(36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc"));
+  add(36, QStringLiteral("copy"), {}, QStringLiteral("Copy only · Ctrl+C"));
+  add(40, QStringLiteral("both"), {}, QStringLiteral("Copy and save · Enter"));
+  add(36, QStringLiteral("save"), {}, QStringLiteral("Save only · Ctrl+S"));
+  add(36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc twice"));
+
+  if (colorPaletteOpen_) {
+    const QRectF palette = colorPaletteRect();
+    for (int index = 0; index < 6; ++index) {
+      buttons.push_back(
+          {{palette.left() + 4 + index * 28, palette.top() + 4, 24, 28},
+           QStringLiteral("color-%1").arg(index), {},
+           QStringLiteral("Color · %1").arg(index + 1),
+           QColor(QString::fromLatin1(kColorNames.at(static_cast<std::size_t>(index))))});
+    }
+    buttons.push_back(
+        {{palette.left() + 4 + 6 * 28, palette.top() + 4, 24, 28},
+         QStringLiteral("custom-color"), {}, QStringLiteral("Custom color"), {}});
+  }
   return buttons;
 }
 
 void CaptureEditor::setStatus(QString status) {
   status_ = std::move(status);
+  update();
+}
+
+void CaptureEditor::handleEscape() {
+  const qint64 closeWindowMs =
+      static_cast<qint64>(QApplication::doubleClickInterval()) * 2;
+  if (escapeTimer_.isValid() && escapeTimer_.elapsed() <= closeWindowMs) {
+    close();
+    return;
+  }
+  escapeTimer_.restart();
+  textEditor_->clear();
+  textEditor_->hide();
+  editingAnnotation_ = -1;
+  dragging_ = false;
+  interaction_ = Interaction::None;
+  colorPaletteOpen_ = false;
+  customColorPickerOpen_ = false;
+  freehandPoints_.clear();
+  if (phase_ == Phase::Edit) {
+    tool_ = Tool::Arrow;
+    setStatus(QStringLiteral("Arrow tool · Esc again to close"));
+  } else {
+    windowMode_ = false;
+    selection_ = {};
+    setStatus(QStringLiteral("Area mode · Esc again to close"));
+  }
+  setFocus(Qt::OtherFocusReason);
+  updatePointerCursor();
   update();
 }
 
@@ -402,26 +681,42 @@ void CaptureEditor::chooseWindow(int index) {
   updatePointerCursor();
 }
 
-void CaptureEditor::beginText(const QPointF &point) {
-  textPoint_ = point;
-  textColor_ = annotationColor();
-  textSize_ = annotationSize_;
+void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
+  editingAnnotation_ = annotationIndex;
+  QString existingText;
+  if (annotationIndex >= 0 && annotationIndex < annotations_.size()) {
+    const Annotation &annotation = annotations_.at(annotationIndex);
+    textColor_ = annotation.color;
+    textSize_ = annotation.size;
+    textPoint_ =
+        annotation.start -
+        QPointF(0, QFontMetricsF(annotationTextFont(textSize_)).ascent());
+    existingText = annotation.text;
+  } else {
+    textPoint_ = point;
+    textColor_ = annotationColor();
+    textSize_ = kTextSizes.at(static_cast<std::size_t>(textSizeIndex_));
+  }
+
   const QRectF image = editImageRect();
   const qreal scale = editScale();
-  const QPointF position = image.topLeft() + point * scale;
+  const QPointF position = image.topLeft() + textPoint_ * scale;
   QFont displayFont = annotationTextFont(textSize_);
   displayFont.setPixelSize(std::max(12, qRound(displayFont.pixelSize() * scale)));
+  const QFontMetrics metrics(displayFont);
   textEditor_->setFont(displayFont);
   textEditor_->setStyleSheet(
-      QStringLiteral("QLineEdit { color: %1; background: transparent; border: none; padding: 0;"
-                     " selection-background-color: #0a84ff; }")
+      QStringLiteral("QLineEdit { color: %1; background: transparent; border: none;"
+                     " margin: 0; padding: 0; selection-background-color: #0a84ff; }")
           .arg(textColor_.name()));
   textEditor_->setGeometry(qRound(position.x()), qRound(position.y()), 72,
-                           QFontMetrics(displayFont).height() + 4);
-  textEditor_->clear();
+                           metrics.height());
+  textEditor_->setText(existingText);
   textEditor_->show();
   textEditor_->raise();
   textEditor_->setFocus(Qt::MouseFocusReason);
+  if (!existingText.isEmpty())
+    textEditor_->selectAll();
 }
 
 void CaptureEditor::acceptText() {
@@ -434,11 +729,21 @@ void CaptureEditor::acceptText() {
     annotation.text = text;
     annotation.color = textColor_;
     annotation.size = textSize_;
-    annotations_.push_back(std::move(annotation));
+    if (editingAnnotation_ >= 0 && editingAnnotation_ < annotations_.size()) {
+      annotations_[editingAnnotation_] = std::move(annotation);
+      selectedAnnotation_ = editingAnnotation_;
+    } else {
+      annotations_.push_back(std::move(annotation));
+      selectedAnnotation_ = annotations_.size() - 1;
+    }
+    tool_ = Tool::Select;
+    setStatus(QStringLiteral("Layer selected · drag to move · handles resize"));
   }
+  editingAnnotation_ = -1;
   textEditor_->clear();
   textEditor_->hide();
   setFocus(Qt::OtherFocusReason);
+  updatePointerCursor();
   update();
 }
 
@@ -454,12 +759,21 @@ void CaptureEditor::selectWindowInDirection(int key) {
                 .arg(capture_.windows.at(next).title));
 }
 
-void CaptureEditor::runOcr() {
+void CaptureEditor::runOcr(const QRectF &localSelection) {
   if (busy_ || selection_.isEmpty())
     return;
+  QRectF target = selection_;
+  if (!localSelection.isEmpty()) {
+    target = QRectF(selection_.topLeft() + localSelection.topLeft(),
+                    localSelection.size())
+                 .intersected(selection_);
+  }
+  if (target.width() < 2 || target.height() < 2)
+    return;
   busy_ = true;
-  setStatus(QStringLiteral("Reading text…"));
-  const QImage image = renderCapture(capture_, selection_, {}, false);
+  setStatus(QStringLiteral("Reading selected text…"));
+  const QImage image =
+      renderCapture(capture_, target, {}, BackgroundStyle::None);
   ocrWatcher_.setFuture(QtConcurrent::run([image] {
     OcrResult result;
     result.text = recognizeText(image, result.error);
@@ -473,7 +787,8 @@ void CaptureEditor::finish(OutputMode mode) {
   busy_ = true;
   setStatus(QStringLiteral("Rendering screenshot…"));
   QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-  const QImage image = renderCapture(capture_, selection_, annotations_, backgroundEnabled_);
+  const QImage image =
+      renderCapture(capture_, selection_, annotations_, backgroundStyle_);
   if (image.isNull()) {
     busy_ = false;
     setStatus(QStringLiteral("Could not render screenshot"));
@@ -508,23 +823,46 @@ void CaptureEditor::finish(OutputMode mode) {
 }
 
 void CaptureEditor::handleToolbar(const QString &action) {
-  if (action == QStringLiteral("tool-arrow"))
+  if (action == QStringLiteral("tool-select"))
+    tool_ = Tool::Select;
+  else if (action == QStringLiteral("tool-arrow"))
     tool_ = Tool::Arrow;
+  else if (action == QStringLiteral("tool-line"))
+    tool_ = Tool::Line;
+  else if (action == QStringLiteral("tool-freehand"))
+    tool_ = Tool::Freehand;
   else if (action == QStringLiteral("tool-marker"))
     tool_ = Tool::Marker;
   else if (action == QStringLiteral("tool-rectangle"))
     tool_ = Tool::Rectangle;
   else if (action == QStringLiteral("tool-text"))
     tool_ = Tool::Text;
-  else if (action.startsWith(QStringLiteral("color-")))
+  else if (action == QStringLiteral("tool-ocr"))
+    tool_ = Tool::Ocr;
+  else if (action == QStringLiteral("palette"))
+    colorPaletteOpen_ = true;
+  else if (action.startsWith(QStringLiteral("color-"))) {
     colorIndex_ = std::clamp(action.sliced(6).toInt(), 0, 5);
-  else if (action == QStringLiteral("ocr"))
+    usingCustomColor_ = false;
+    customColorPickerOpen_ = false;
+    if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size())
+      annotations_[selectedAnnotation_].color = annotationColor();
+  } else if (action == QStringLiteral("custom-color")) {
+    usingCustomColor_ = true;
+    customColorPickerOpen_ = !customColorPickerOpen_;
+  } else if (action == QStringLiteral("ocr"))
     runOcr();
-  else if (action == QStringLiteral("background"))
-    backgroundEnabled_ = !backgroundEnabled_;
-  else if (action == QStringLiteral("undo")) {
-    if (!annotations_.isEmpty())
+  else if (action == QStringLiteral("background")) {
+    backgroundStyle_ = static_cast<BackgroundStyle>(
+        (static_cast<int>(backgroundStyle_) + 1) % 5);
+    setStatus(QStringLiteral("Backdrop: %1 · B cycles")
+                  .arg(backgroundName(backgroundStyle_)));
+  } else if (action == QStringLiteral("undo")) {
+    if (!annotations_.isEmpty()) {
       annotations_.removeLast();
+      selectedAnnotation_ =
+          std::min(selectedAnnotation_, static_cast<int>(annotations_.size()) - 1);
+    }
   } else if (action == QStringLiteral("copy"))
     finish(OutputMode::Copy);
   else if (action == QStringLiteral("both"))
@@ -539,10 +877,21 @@ void CaptureEditor::handleToolbar(const QString &action) {
 
 void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   if (event->key() == Qt::Key_Escape) {
-    close();
+    handleEscape();
     return;
   }
   if (phase_ == Phase::Select) {
+    if (event->matches(QKeySequence::SelectAll)) {
+      windowMode_ = false;
+      dragging_ = false;
+      hoveredWindow_ = -1;
+      selection_ = QRectF(QPointF(), capture_.preview.size());
+      phase_ = Phase::Edit;
+      setStatus(QStringLiteral("Full screen selected · native resolution preserved"));
+      updatePointerCursor();
+      update();
+      return;
+    }
     const bool directionalKey = event->key() == Qt::Key_Left ||
                                 event->key() == Qt::Key_Right ||
                                 event->key() == Qt::Key_Up ||
@@ -576,20 +925,34 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   }
 
   if (event->matches(QKeySequence::Undo)) {
-    if (!annotations_.isEmpty())
+    if (!annotations_.isEmpty()) {
       annotations_.removeLast();
-  } else if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
-             event->modifiers().testFlag(Qt::ShiftModifier)) {
-    finish(OutputMode::Both);
+      selectedAnnotation_ =
+          std::min(selectedAnnotation_, static_cast<int>(annotations_.size()) - 1);
+    }
+  } else if (event->matches(QKeySequence::Copy)) {
+    finish(OutputMode::Copy);
     return;
   } else if (event->matches(QKeySequence::Save)) {
     finish(OutputMode::Save);
     return;
   } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-    finish(OutputMode::Copy);
+    finish(OutputMode::Both);
     return;
+  } else if ((event->key() == Qt::Key_Delete ||
+              event->key() == Qt::Key_Backspace) &&
+             selectedAnnotation_ >= 0 &&
+             selectedAnnotation_ < annotations_.size()) {
+    annotations_.removeAt(selectedAnnotation_);
+    selectedAnnotation_ = -1;
+  } else if (event->key() == Qt::Key_V) {
+    tool_ = Tool::Select;
   } else if (event->key() == Qt::Key_A) {
     tool_ = Tool::Arrow;
+  } else if (event->key() == Qt::Key_L) {
+    tool_ = Tool::Line;
+  } else if (event->key() == Qt::Key_F) {
+    tool_ = Tool::Freehand;
   } else if (event->key() == Qt::Key_C || event->key() == Qt::Key_M) {
     tool_ = Tool::Marker;
   } else if (event->key() == Qt::Key_R) {
@@ -597,11 +960,17 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   } else if (event->key() == Qt::Key_T) {
     tool_ = Tool::Text;
   } else if (event->key() == Qt::Key_O) {
-    runOcr();
+    tool_ = Tool::Ocr;
   } else if (event->key() == Qt::Key_B) {
-    backgroundEnabled_ = !backgroundEnabled_;
+    backgroundStyle_ = static_cast<BackgroundStyle>(
+        (static_cast<int>(backgroundStyle_) + 1) % 5);
+    setStatus(QStringLiteral("Backdrop: %1 · B cycles")
+                  .arg(backgroundName(backgroundStyle_)));
   } else if (event->key() >= Qt::Key_1 && event->key() <= Qt::Key_6) {
     colorIndex_ = event->key() - Qt::Key_1;
+    usingCustomColor_ = false;
+    if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size())
+      annotations_[selectedAnnotation_].color = annotationColor();
   } else {
     QWidget::keyPressEvent(event);
     return;
@@ -617,8 +986,99 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       hoveredWindow_ = windowAt(cursor_);
     else if (dragging_)
       selection_ = normalizedSelection(dragStart_, cursor_);
+  } else {
+    if (tool_ == Tool::Select && dragging_ && selectedAnnotation_ >= 0 &&
+        selectedAnnotation_ < annotations_.size()) {
+      const QPointF point = toAnnotationPoint(cursor_);
+      Annotation &annotation = annotations_[selectedAnnotation_];
+      annotation = originalAnnotation_;
+      if (interaction_ == Interaction::Move) {
+        const QPointF delta = point - dragStart_;
+        annotation.start += delta;
+        if (hasEndpointHandles(annotation.kind))
+          annotation.end += delta;
+        if (annotation.kind == Annotation::Kind::Freehand) {
+          for (QPointF &strokePoint : annotation.points)
+            strokePoint += delta;
+        }
+      } else if (interaction_ == Interaction::ResizeStart) {
+        if (hasEndpointHandles(annotation.kind))
+          annotation.start = point;
+      } else if (interaction_ == Interaction::ResizeEnd) {
+        if (hasEndpointHandles(annotation.kind)) {
+          annotation.end = point;
+        } else if (annotation.kind == Annotation::Kind::Freehand) {
+          const QRectF originalBounds = annotationBounds(originalAnnotation_);
+          const qreal scaleX =
+              originalBounds.width() > 0
+                  ? std::max<qreal>(0.05, (point.x() - originalBounds.left()) /
+                                             originalBounds.width())
+                  : 1.0;
+          const qreal scaleY =
+              originalBounds.height() > 0
+                  ? std::max<qreal>(0.05, (point.y() - originalBounds.top()) /
+                                             originalBounds.height())
+                  : 1.0;
+          for (int index = 0; index < annotation.points.size(); ++index) {
+            const QPointF relative =
+                originalAnnotation_.points.at(index) - originalBounds.topLeft();
+            annotation.points[index] =
+                originalBounds.topLeft() +
+                QPointF(relative.x() * scaleX, relative.y() * scaleY);
+          }
+        } else if (annotation.kind == Annotation::Kind::Marker) {
+          annotation.size =
+              std::clamp(QLineF(annotation.start, point).length() / 3.0, 2.0, 30.0);
+        } else if (annotation.kind == Annotation::Kind::Text) {
+          const QRectF originalBounds = annotationBounds(originalAnnotation_);
+          const qreal ratio =
+              originalBounds.width() > 0
+                  ? std::abs(point.x() - originalBounds.left()) /
+                        originalBounds.width()
+                  : 1.0;
+          annotation.size = std::clamp(originalAnnotation_.size * ratio, 1.0, 24.0);
+          annotation.start.setY(
+              originalBounds.top() +
+              QFontMetricsF(annotationTextFont(annotation.size)).ascent());
+        }
+      }
+    }
+    if (tool_ == Tool::Freehand && dragging_) {
+      const QPointF point = toAnnotationPoint(cursor_);
+      if (freehandPoints_.isEmpty() ||
+          QLineF(freehandPoints_.last(), point).length() >= 1.5)
+        freehandPoints_.push_back(point);
+    }
+    bool overPaletteAnchor = false;
+    for (const ToolbarButton &button : toolbarButtons()) {
+      if (button.action == QStringLiteral("palette") &&
+          button.rect.contains(cursor_)) {
+        overPaletteAnchor = true;
+        break;
+      }
+    }
+    const bool overPalette =
+        colorPaletteOpen_ &&
+        colorPaletteRect().adjusted(0, -4, 0, 0).contains(cursor_);
+    const bool overCustom =
+        customColorPickerOpen_ && customColorPanelRect().contains(cursor_);
+    colorPaletteOpen_ = overPaletteAnchor || overPalette || overCustom;
   }
   updatePointerCursor();
+  update();
+}
+
+void CaptureEditor::mouseDoubleClickEvent(QMouseEvent *event) {
+  if (phase_ != Phase::Edit || event->button() != Qt::LeftButton ||
+      !editImageRect().contains(event->position()))
+    return;
+  const int index = annotationAt(toAnnotationPoint(event->position()));
+  if (index < 0 || annotations_.at(index).kind != Annotation::Kind::Text)
+    return;
+  selectedAnnotation_ = index;
+  tool_ = Tool::Select;
+  beginText({}, index);
+  event->accept();
   update();
 }
 
@@ -636,6 +1096,27 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     dragging_ = true;
     return;
   }
+  if (customColorPickerOpen_) {
+    if (customColorPanelRect().contains(cursor_)) {
+      applyCustomColor(cursor_);
+      return;
+    }
+    customColorPickerOpen_ = false;
+    if (!colorPaletteRect().contains(cursor_)) {
+      update();
+      return;
+    }
+  }
+  if (tool_ == Tool::Text && !colorPaletteOpen_ && !customColorPickerOpen_ &&
+      textSizePanelRect().contains(cursor_)) {
+    const qreal localX = cursor_.x() - textSizePanelRect().left();
+    textSizeIndex_ = std::clamp(static_cast<int>(localX / 34.0), 0, 2);
+    setStatus(QStringLiteral("Neucha · size %1 · wheel changes size")
+                  .arg(QString::fromLatin1(kTextSizeNames.at(
+                      static_cast<std::size_t>(textSizeIndex_)))));
+    update();
+    return;
+  }
 
   for (const ToolbarButton &button : toolbarButtons()) {
     if (button.rect.contains(cursor_)) {
@@ -647,6 +1128,44 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     return;
 
   const QPointF point = toAnnotationPoint(cursor_);
+  if (tool_ == Tool::Select) {
+    const qreal tolerance = 9.0 / std::max<qreal>(editScale(), 0.01);
+    if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size()) {
+      const Annotation &selected = annotations_.at(selectedAnnotation_);
+      const QRectF bounds = annotationBounds(selected);
+      const QPointF first =
+          hasEndpointHandles(selected.kind) ? selected.start : bounds.topLeft();
+      const QPointF last =
+          hasEndpointHandles(selected.kind) ? selected.end : bounds.bottomRight();
+      if (QLineF(point, first).length() <= tolerance &&
+          hasEndpointHandles(selected.kind)) {
+        interaction_ = Interaction::ResizeStart;
+      } else if (QLineF(point, last).length() <= tolerance) {
+        interaction_ = Interaction::ResizeEnd;
+      } else {
+        selectedAnnotation_ = annotationAt(point);
+        interaction_ = selectedAnnotation_ >= 0 ? Interaction::Move
+                                                : Interaction::None;
+      }
+    } else {
+      selectedAnnotation_ = annotationAt(point);
+      interaction_ = selectedAnnotation_ >= 0 ? Interaction::Move
+                                              : Interaction::None;
+    }
+    if (selectedAnnotation_ >= 0) {
+      originalAnnotation_ = annotations_.at(selectedAnnotation_);
+      dragStart_ = point;
+      dragging_ = true;
+      setStatus(QStringLiteral(
+          "Vector layer selected · drag to move · handles resize · double-click text"));
+    } else {
+      dragging_ = false;
+      setStatus(QStringLiteral("No layer selected"));
+    }
+    updatePointerCursor();
+    update();
+    return;
+  }
   if (tool_ == Tool::Marker) {
     Annotation annotation;
     annotation.kind = Annotation::Kind::Marker;
@@ -655,11 +1174,20 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     annotation.color = annotationColor();
     annotation.size = annotationSize_;
     annotations_.push_back(std::move(annotation));
+    selectedAnnotation_ = static_cast<int>(annotations_.size()) - 1;
+    tool_ = Tool::Select;
+    setStatus(QStringLiteral("Layer selected · drag to move · handles resize"));
+    updatePointerCursor();
   } else if (tool_ == Tool::Text) {
     beginText(point);
   } else {
     dragStart_ = point;
     dragging_ = true;
+    if (tool_ == Tool::Freehand) {
+      freehandPoints_.clear();
+      freehandPoints_.reserve(256);
+      freehandPoints_.push_back(point);
+    }
   }
   update();
 }
@@ -678,17 +1206,70 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     update();
     return;
   }
+  if (tool_ == Tool::Select) {
+    dragging_ = false;
+    interaction_ = Interaction::None;
+    updatePointerCursor();
+    update();
+    return;
+  }
 
   const QPointF end = toAnnotationPoint(event->position());
+  if (tool_ == Tool::Freehand) {
+    if (freehandPoints_.isEmpty() ||
+        QLineF(freehandPoints_.last(), end).length() >= 1.0)
+      freehandPoints_.push_back(end);
+    qreal length = 0;
+    for (int index = 1; index < freehandPoints_.size(); ++index)
+      length += QLineF(freehandPoints_.at(index - 1),
+                       freehandPoints_.at(index))
+                    .length();
+    if (length > 4) {
+      Annotation annotation;
+      annotation.kind = Annotation::Kind::Freehand;
+      annotation.start = freehandPoints_.first();
+      annotation.end = freehandPoints_.last();
+      annotation.color = annotationColor();
+      annotation.size = annotationSize_;
+      annotation.points = std::move(freehandPoints_);
+      annotations_.push_back(std::move(annotation));
+      selectedAnnotation_ = static_cast<int>(annotations_.size()) - 1;
+      tool_ = Tool::Select;
+      setStatus(QStringLiteral("Layer selected · drag to move · handle resizes"));
+    }
+    freehandPoints_.clear();
+    dragging_ = false;
+    updatePointerCursor();
+    update();
+    return;
+  }
+  if (tool_ == Tool::Ocr) {
+    const QRectF ocrRect(dragStart_, end);
+    dragging_ = false;
+    if (ocrRect.normalized().width() > 4 && ocrRect.normalized().height() > 4) {
+      runOcr(ocrRect.normalized());
+      tool_ = Tool::Select;
+      updatePointerCursor();
+    }
+    update();
+    return;
+  }
   if (QLineF(dragStart_, end).length() > 4) {
     Annotation annotation;
-    annotation.kind = tool_ == Tool::Rectangle ? Annotation::Kind::Rectangle
-                                                : Annotation::Kind::Arrow;
+    annotation.kind =
+        tool_ == Tool::Rectangle
+            ? Annotation::Kind::Rectangle
+            : (tool_ == Tool::Line ? Annotation::Kind::Line
+                                   : Annotation::Kind::Arrow);
     annotation.start = dragStart_;
     annotation.end = end;
     annotation.color = annotationColor();
     annotation.size = annotationSize_;
     annotations_.push_back(std::move(annotation));
+    selectedAnnotation_ = static_cast<int>(annotations_.size()) - 1;
+    tool_ = Tool::Select;
+    setStatus(QStringLiteral("Layer selected · drag to move · handles resize"));
+    updatePointerCursor();
   }
   dragging_ = false;
   update();
@@ -700,14 +1281,37 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
     return;
   }
   const int step = event->angleDelta().y() > 0 ? 1 : -1;
-  annotationSize_ = std::clamp(annotationSize_ + step, 2.0, 12.0);
-  setStatus(QStringLiteral("Size %1 · mouse wheel changes size").arg(qRound(annotationSize_)));
+  if (tool_ == Tool::Text) {
+    textSizeIndex_ = std::clamp(textSizeIndex_ + step, 0, 2);
+    setStatus(QStringLiteral("Neucha · size %1 · wheel changes size")
+                  .arg(QString::fromLatin1(kTextSizeNames.at(
+                      static_cast<std::size_t>(textSizeIndex_)))));
+  } else if (tool_ == Tool::Arrow || tool_ == Tool::Line ||
+             tool_ == Tool::Freehand || tool_ == Tool::Marker) {
+    annotationSize_ = std::clamp(annotationSize_ + step, 2.0, 12.0);
+    setStatus(
+        QStringLiteral("Size %1 · mouse wheel changes size").arg(qRound(annotationSize_)));
+  } else {
+    QWidget::wheelEvent(event);
+    return;
+  }
   event->accept();
+  update();
 }
 
 void CaptureEditor::updatePointerCursor() {
   if (phase_ == Phase::Select) {
     setCursor(windowMode_ ? Qt::PointingHandCursor : Qt::CrossCursor);
+    return;
+  }
+  if ((colorPaletteOpen_ && colorPaletteRect().contains(cursor_)) ||
+      (customColorPickerOpen_ && customColorPanelRect().contains(cursor_))) {
+    setCursor(Qt::PointingHandCursor);
+    return;
+  }
+  if (tool_ == Tool::Text && !colorPaletteOpen_ && !customColorPickerOpen_ &&
+      textSizePanelRect().contains(cursor_)) {
+    setCursor(Qt::PointingHandCursor);
     return;
   }
   for (const ToolbarButton &button : toolbarButtons()) {
@@ -716,7 +1320,9 @@ void CaptureEditor::updatePointerCursor() {
       return;
     }
   }
-  if (tool_ == Tool::Marker)
+  if (tool_ == Tool::Select)
+    setCursor(Qt::ArrowCursor);
+  else if (tool_ == Tool::Marker)
     setCursor(Qt::PointingHandCursor);
   else if (tool_ == Tool::Text)
     setCursor(Qt::IBeamCursor);
@@ -725,22 +1331,24 @@ void CaptureEditor::updatePointerCursor() {
 }
 
 void CaptureEditor::paintSelect(QPainter &painter) {
-  painter.drawImage(rect(), capture_.preview);
+  painter.drawImage(rect(), capture_.source);
   painter.fillRect(rect(), QColor(0, 0, 0, 143));
 
   if (windowMode_) {
     if (hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()) {
       const QRect window = capture_.windows.at(hoveredWindow_).rect;
-      painter.drawImage(window, capture_.preview, window);
+      painter.drawImage(window, capture_.source, sourceRect(window));
     }
     for (int index = 0; index < capture_.windows.size(); ++index) {
       const WindowTarget &window = capture_.windows.at(index);
-      painter.setPen(QPen(index == hoveredWindow_ ? Qt::white : QColor(255, 255, 255, 72), 2));
+      painter.setPen(QPen(index == hoveredWindow_ ? Qt::white
+                                                  : QColor(255, 255, 255, 72),
+                          2));
       painter.setBrush(Qt::NoBrush);
       painter.drawRect(window.rect);
     }
   } else if (!selection_.isEmpty()) {
-    painter.drawImage(selection_, capture_.preview, selection_);
+    painter.drawImage(selection_, capture_.source, sourceRect(selection_));
     painter.setPen(QPen(Qt::white, 2));
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(selection_);
@@ -756,7 +1364,8 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   badgeFont.setBold(true);
   badgeFont.setPixelSize(11);
   painter.setFont(badgeFont);
-  const QString badge = windowMode_ ? QStringLiteral("WINDOW  ×") : QStringLiteral("AREA  ×");
+  const QString badge = windowMode_ ? QStringLiteral("WINDOW  ×")
+                                    : QStringLiteral("AREA  ×");
   const int badgeWidth = painter.fontMetrics().horizontalAdvance(badge) + 24;
   const QRectF badgeRect((width() - badgeWidth) / 2.0, 12, badgeWidth, 32);
   painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
@@ -765,45 +1374,69 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   painter.setPen(windowMode_ ? QColor(QStringLiteral("#ffd60a"))
                              : QColor(QStringLiteral("#30d158")));
   painter.drawText(badgeRect, Qt::AlignCenter, badge);
+  drawHotkeyLegend(
+      painter, rect(), cursor_,
+      {{QStringLiteral("Drag"), QStringLiteral("Area")},
+       {QStringLiteral("Space"), QStringLiteral("Window")},
+       {QStringLiteral("Ctrl+A"), QStringLiteral("Fullscreen")},
+       {QStringLiteral("Esc ×2"), QStringLiteral("Close")}});
   drawStatusPill(painter, rect(), status_);
 }
 
 void CaptureEditor::paintEdit(QPainter &painter) {
-  painter.drawImage(rect(), fullscreenPreview_);
+  painter.drawImage(rect(), capture_.source);
   painter.fillRect(rect(), QColor(0, 0, 0, 160));
   const QRectF image = editImageRect();
-  if (backgroundEnabled_) {
-    const QRectF backing = image.adjusted(-22, -22, 22, 22);
-    QLinearGradient gradient(backing.topLeft(), backing.bottomRight());
-    gradient.setColorAt(0, QColor(QStringLiteral("#1d2030")));
-    gradient.setColorAt(1, QColor(QStringLiteral("#364f78")));
+  const bool hasBackground = backgroundStyle_ != BackgroundStyle::None;
+  if (hasBackground) {
+    const QRectF backing = image.adjusted(-28, -28, 28, 28);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0, 0, 0, 105));
-    painter.drawRoundedRect(backing.translated(0, 10), 18, 18);
-    painter.setBrush(gradient);
-    painter.drawRoundedRect(backing, 16, 16);
+    for (int layer = 20; layer > 0; --layer) {
+      const qreal spread = layer * 0.7;
+      painter.setBrush(QColor(0, 0, 0, 3 + (20 - layer) / 3));
+      painter.drawRoundedRect(
+          image.adjusted(-spread, -spread + 12, spread, spread + 12),
+          15 + spread, 15 + spread);
+    }
+    for (int layer = 10; layer > 0; --layer) {
+      const qreal spread = layer * 0.45;
+      painter.setBrush(QColor(0, 0, 0, 5 + (10 - layer) * 2));
+      painter.drawRoundedRect(
+          image.adjusted(-spread, -spread + 7, spread, spread + 7),
+          12 + spread, 12 + spread);
+    }
+    paintCaptureBackground(painter, backing, backgroundStyle_);
   }
 
   QPainterPath clip;
-  clip.addRoundedRect(image, backgroundEnabled_ ? 10 : 0, backgroundEnabled_ ? 10 : 0);
+  clip.addRoundedRect(image, hasBackground ? 10 : 0, hasBackground ? 10 : 0);
   painter.save();
   painter.setClipPath(clip);
-  painter.drawImage(image, capture_.preview, selection_);
+  painter.drawImage(image, capture_.source, sourceRect(selection_));
   painter.restore();
 
   painter.save();
   painter.translate(image.topLeft());
   painter.scale(editScale(), editScale());
-  for (const Annotation &annotation : annotations_)
-    paintAnnotation(painter, annotation);
-  if (dragging_) {
+  for (int index = 0; index < annotations_.size(); ++index) {
+    if (index != editingAnnotation_)
+      paintAnnotation(painter, annotations_.at(index));
+  }
+  if (dragging_ && tool_ != Tool::Select) {
     Annotation preview;
-    preview.kind = tool_ == Tool::Rectangle ? Annotation::Kind::Rectangle
-                                            : Annotation::Kind::Arrow;
-    preview.start = dragStart_;
-    preview.end = toAnnotationPoint(cursor_);
-    preview.color = annotationColor();
-    preview.size = annotationSize_;
+    if (tool_ == Tool::Freehand) {
+      preview.kind = Annotation::Kind::Freehand;
+      preview.points = freehandPoints_;
+    } else {
+      preview.kind = (tool_ == Tool::Rectangle || tool_ == Tool::Ocr)
+                         ? Annotation::Kind::Rectangle
+                         : (tool_ == Tool::Line ? Annotation::Kind::Line
+                                               : Annotation::Kind::Arrow);
+      preview.start = dragStart_;
+      preview.end = toAnnotationPoint(cursor_);
+    }
+    preview.color = tool_ == Tool::Ocr ? QColor(Qt::white) : annotationColor();
+    preview.size = tool_ == Tool::Ocr ? 2.0 : annotationSize_;
     paintAnnotation(painter, preview);
   } else if (tool_ == Tool::Marker && image.contains(cursor_)) {
     Annotation preview;
@@ -815,7 +1448,73 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     preview.size = annotationSize_;
     paintAnnotation(painter, preview);
   }
+  if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
+      selectedAnnotation_ != editingAnnotation_) {
+    const Annotation &selected = annotations_.at(selectedAnnotation_);
+    const QRectF bounds = annotationBounds(selected).adjusted(-4, -4, 4, 4);
+    const qreal scale = std::max<qreal>(editScale(), 0.01);
+    painter.setPen(
+        QPen(QColor(255, 255, 255, 220), 1.0 / scale, Qt::DashLine));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(bounds);
+    const qreal radius = 5.0 / scale;
+    painter.setPen(QPen(Qt::white, 1.0 / scale));
+    painter.setBrush(QColor(QStringLiteral("#0a84ff")));
+    if (hasEndpointHandles(selected.kind))
+      painter.drawEllipse(selected.start, radius, radius);
+    const QPointF last =
+        hasEndpointHandles(selected.kind) ? selected.end : bounds.bottomRight();
+    painter.drawEllipse(last, radius, radius);
+  }
   painter.restore();
+
+  if (colorPaletteOpen_) {
+    painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
+    painter.setBrush(QColor(22, 22, 28, 248));
+    painter.drawRoundedRect(colorPaletteRect(), 9, 9);
+  }
+  if (customColorPickerOpen_) {
+    const QRectF panel = customColorPanelRect();
+    const QRectF field = panel.adjusted(12, 12, -36, -12);
+    const QRectF hue(panel.right() - 26, panel.top() + 12, 14, panel.height() - 24);
+    painter.setPen(QPen(QColor(255, 255, 255, 38), 1));
+    painter.setBrush(QColor(20, 20, 25, 250));
+    painter.drawRoundedRect(panel, 10, 10);
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor::fromHsvF(customHue_, 1.0, 1.0));
+    painter.drawRoundedRect(field, 5, 5);
+    QLinearGradient white(field.topLeft(), field.topRight());
+    white.setColorAt(0, Qt::white);
+    white.setColorAt(1, QColor(255, 255, 255, 0));
+    painter.setBrush(white);
+    painter.drawRoundedRect(field, 5, 5);
+    QLinearGradient black(field.topLeft(), field.bottomLeft());
+    black.setColorAt(0, QColor(0, 0, 0, 0));
+    black.setColorAt(1, Qt::black);
+    painter.setBrush(black);
+    painter.drawRoundedRect(field, 5, 5);
+
+    QLinearGradient hues(hue.topLeft(), hue.bottomLeft());
+    hues.setColorAt(0.0, QColor::fromHsvF(0.0, 1, 1));
+    hues.setColorAt(1.0 / 6.0, QColor::fromHsvF(1.0 / 6.0, 1, 1));
+    hues.setColorAt(2.0 / 6.0, QColor::fromHsvF(2.0 / 6.0, 1, 1));
+    hues.setColorAt(3.0 / 6.0, QColor::fromHsvF(3.0 / 6.0, 1, 1));
+    hues.setColorAt(4.0 / 6.0, QColor::fromHsvF(4.0 / 6.0, 1, 1));
+    hues.setColorAt(5.0 / 6.0, QColor::fromHsvF(5.0 / 6.0, 1, 1));
+    hues.setColorAt(1.0, QColor::fromHsvF(1.0, 1, 1));
+    painter.setBrush(hues);
+    painter.drawRoundedRect(hue, 4, 4);
+
+    const QPointF fieldMarker(
+        field.left() + customColor_.hsvSaturationF() * field.width(),
+        field.bottom() - customColor_.valueF() * field.height());
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(Qt::white, 2));
+    painter.drawEllipse(fieldMarker, 5, 5);
+    const qreal hueY = hue.top() + customHue_ * hue.height();
+    painter.drawLine(QPointF(hue.left() - 2, hueY), QPointF(hue.right() + 2, hueY));
+  }
 
   const QString currentTool = toolAction(tool_);
   QFont buttonFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
@@ -825,9 +1524,13 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   const QVector<ToolbarButton> buttons = toolbarButtons();
   const ToolbarButton *hoveredButton = nullptr;
   for (const ToolbarButton &button : buttons) {
-    const bool selected = button.action == currentTool ||
-                          (button.action == QStringLiteral("background") && backgroundEnabled_) ||
-                          (button.action == QStringLiteral("color-%1").arg(colorIndex_));
+    const bool selected =
+        button.action == currentTool ||
+        (button.action == QStringLiteral("background") && hasBackground) ||
+        (button.action == QStringLiteral("palette") && colorPaletteOpen_) ||
+        (button.action == QStringLiteral("custom-color") && usingCustomColor_) ||
+        (!usingCustomColor_ &&
+         button.action == QStringLiteral("color-%1").arg(colorIndex_));
     const bool hovered = button.rect.contains(cursor_);
     if (hovered)
       hoveredButton = &button;
@@ -847,9 +1550,68 @@ void CaptureEditor::paintEdit(QPainter &painter) {
                       QColor(245, 245, 247));
     }
   }
+  if (tool_ == Tool::Text && !colorPaletteOpen_ && !customColorPickerOpen_) {
+    const QRectF panel = textSizePanelRect();
+    painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
+    painter.setBrush(QColor(22, 22, 28, 248));
+    painter.drawRoundedRect(panel, 9, 9);
+    QFont sizeFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    sizeFont.setPixelSize(11);
+    sizeFont.setBold(true);
+    painter.setFont(sizeFont);
+    for (int index = 0; index < 3; ++index) {
+      const QRectF item(panel.left() + index * 34, panel.top(), 34, panel.height());
+      if (index == textSizeIndex_) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#0a84ff")));
+        painter.drawRoundedRect(item.adjusted(3, 3, -3, -3), 7, 7);
+      }
+      painter.setPen(QColor(QStringLiteral("#f5f5f7")));
+      painter.drawText(item, Qt::AlignCenter,
+                       QString::fromLatin1(kTextSizeNames.at(
+                           static_cast<std::size_t>(index))));
+    }
+  }
   drawStatusPill(painter, rect(), status_);
-  if (hoveredButton)
+  drawHotkeyLegend(
+      painter, rect(), cursor_,
+      {{QStringLiteral("V"), QStringLiteral("Select / move layer")},
+       {QStringLiteral("A"), QStringLiteral("Arrow")},
+       {QStringLiteral("L"), QStringLiteral("Line")},
+       {QStringLiteral("F"), QStringLiteral("Freehand")},
+       {QStringLiteral("C"), QStringLiteral("Marker")},
+       {QStringLiteral("R"), QStringLiteral("Rectangle")},
+       {QStringLiteral("T"), QStringLiteral("Text")},
+       {QStringLiteral("Double click"), QStringLiteral("Edit text layer")},
+       {QStringLiteral("1–6"), QStringLiteral("Color")},
+       {QStringLiteral("Wheel"), QStringLiteral("Size")},
+       {QStringLiteral("O"), QStringLiteral("Select OCR text")},
+       {QStringLiteral("B"), QStringLiteral("Cycle backdrop")},
+       {QStringLiteral("Ctrl+Z"), QStringLiteral("Undo")},
+       {QStringLiteral("Enter"), QStringLiteral("Copy + save")},
+       {QStringLiteral("Ctrl+C"), QStringLiteral("Copy only")},
+       {QStringLiteral("Ctrl+S"), QStringLiteral("Save only")},
+       {QStringLiteral("Esc"), QStringLiteral("Arrow / twice close")}});
+  if (hoveredButton) {
     drawInstantTooltip(painter, rect(), hoveredButton->rect, hoveredButton->tooltip);
+  } else if (tool_ == Tool::Arrow || tool_ == Tool::Line ||
+             tool_ == Tool::Freehand || tool_ == Tool::Marker ||
+             tool_ == Tool::Text) {
+    const QString selectedAction = toolAction(tool_);
+    for (const ToolbarButton &button : buttons) {
+      if (button.action == selectedAction) {
+        const QString tooltip =
+            tool_ == Tool::Text
+                ? QStringLiteral("Neucha · S  M  L · current %1 · Scroll wheel")
+                      .arg(QString::fromLatin1(kTextSizeNames.at(
+                          static_cast<std::size_t>(textSizeIndex_))))
+                : QStringLiteral("Size %1 · Scroll wheel").arg(qRound(annotationSize_));
+        drawInstantTooltip(painter, rect(), button.rect, tooltip);
+        break;
+      }
+    }
+  }
+
 }
 
 void CaptureEditor::paintEvent(QPaintEvent *event) {

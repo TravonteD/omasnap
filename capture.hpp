@@ -8,6 +8,7 @@
 
 class QFont;
 class QPainter;
+class QProcess;
 
 struct MonitorInfo {
   QString name;
@@ -30,8 +31,10 @@ struct CaptureData {
   QVector<WindowTarget> windows;
 };
 
+enum class BackgroundStyle { None, Aurora, Sunset, Lagoon, Violet };
+
 struct Annotation {
-  enum class Kind { Arrow, Marker, Rectangle, Text };
+  enum class Kind { Arrow, Line, Freehand, Marker, Rectangle, Text };
 
   Kind kind = Kind::Arrow;
   QPointF start;
@@ -40,18 +43,24 @@ struct Annotation {
   QColor color;
   qreal size = 4.0;
   int number = 0;
+  QVector<QPointF> points;
 };
 
+[[nodiscard]] bool loadCaptureFonts();
 [[nodiscard]] QFont annotationTextFont(qreal size);
-[[nodiscard]] bool captureFocusedMonitor(CaptureData &capture, QString &error);
+[[nodiscard]] bool captureFocusedMonitor(CaptureData &capture, QString &error,
+                                         QProcess *heldFreeze = nullptr);
 [[nodiscard]] bool captureWindowSurface(const WindowTarget &window, QImage &image,
                                         QString &error);
 [[nodiscard]] QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                                    const QVector<Annotation> &annotations,
-                                   bool backgroundEnabled);
+                                   BackgroundStyle backgroundStyle);
 [[nodiscard]] bool copyPngToClipboard(const QImage &image, QString &error);
 [[nodiscard]] bool copyTextToClipboard(const QString &text, QString &error);
 void paintAnnotation(QPainter &painter, const Annotation &annotation);
+void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
+                            BackgroundStyle backgroundStyle);
 [[nodiscard]] QString saveScreenshot(const QImage &image, QString &error);
 [[nodiscard]] QString recognizeText(const QImage &image, QString &error);
 void sendCaptureNotification(const QString &message, const QString &imagePath = {});
+void stopCaptureFreeze(QProcess &freeze);
