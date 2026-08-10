@@ -760,8 +760,8 @@ void CaptureEditor::handleEscape() {
   customColorPickerOpen_ = false;
   freehandPoints_.clear();
   if (phase_ == Phase::Edit) {
-    tool_ = Tool::Arrow;
-    setStatus(QStringLiteral("Arrow tool · Esc again to close"));
+    tool_ = Tool::Select;
+    setStatus(QStringLiteral("Select/move · Esc again to close"));
   } else {
     windowMode_ = false;
     selection_ = {};

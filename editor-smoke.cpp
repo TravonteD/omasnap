@@ -343,10 +343,11 @@ int main(int argc, char **argv) {
   if (!recognizeText(ocrImage, ocrError)
            .contains(QStringLiteral("OCR smoke test 42")))
     return 5;
+  QTest::mouseMove(&editor, QPoint(400, 300), 20);
   QTest::keyClick(&editor, Qt::Key_T);
   QTest::keyClick(&editor, Qt::Key_Escape);
   application.processEvents();
-  if (!editor.isVisible())
+  if (!editor.isVisible() || editor.cursor().shape() != Qt::ArrowCursor)
     return 24;
   QTest::keyClick(&editor, Qt::Key_Escape);
   application.processEvents();

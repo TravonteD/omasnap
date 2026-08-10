@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(omarchy-capture-editor VERSION 1.0.0 LANGUAGES C CXX)
+project(omarchy-capture-editor VERSION 1.0.1 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 find_package(PkgConfig REQUIRED)
