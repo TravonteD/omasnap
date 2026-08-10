@@ -5,6 +5,16 @@ It captures the focused monitor before mapping an exclusive layer-shell surface,
 editor never appears in its own screenshot. The editor retains annotations as movable,
 resizable vector layers and preserves the monitor's native pixels on scaled displays.
 
+<video
+  src="https://raw.githubusercontent.com/tobi/omarchy-capture-editor/main/assets/capture-editor.mp4"
+  autoplay
+  loop
+  muted
+  playsinline
+  controls
+  width="100%">
+</video>
+
 ## Features
 
 - Freeform region, window, and full-monitor capture modes.
