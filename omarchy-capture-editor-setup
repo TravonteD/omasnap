@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: omarchy-capture-editor-setup [--remove]
+
+Install or remove the standard Omarchy PRINT binding and layer rule.
+EOF
+}
+
+remove=0
+case "${1:-}" in
+  "") ;;
+  --remove) remove=1 ;;
+  --help|-h) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+config_root="${XDG_CONFIG_HOME:-$HOME/.config}"
+hypr_dir="$config_root/hypr"
+hyprland="$hypr_dir/hyprland.lua"
+target="$hypr_dir/omarchy_capture_editor.lua"
+require_line='require("hypr.omarchy_capture_editor")'
+timestamp="$(date +%s%N)"
+
+if [[ ! -f "$hyprland" ]]; then
+  printf 'omarchy-capture-editor-setup: missing %s\n' "$hyprland" >&2
+  exit 1
+fi
+
+backup_hyprland=""
+backup_module=""
+module_existed=0
+if [[ -e "$target" ]]; then
+  module_existed=1
+fi
+
+backup_hyprland_file() {
+  if [[ -z "$backup_hyprland" ]]; then
+    backup_hyprland="${hyprland}.bak.${timestamp}"
+    cp -p -- "$hyprland" "$backup_hyprland"
+  fi
+}
+
+backup_module_file() {
+  if [[ -e "$target" && -z "$backup_module" ]]; then
+    backup_module="${target}.bak.${timestamp}"
+    cp -p -- "$target" "$backup_module"
+  fi
+}
+
+find_module() {
+  local candidate
+  for candidate in \
+    "${OMARCHY_CAPTURE_EDITOR_HYPR_MODULE:-}" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-capture-editor/omarchy_capture_editor.lua" \
+    "/usr/local/share/omarchy-capture-editor/omarchy_capture_editor.lua" \
+    "/usr/share/omarchy-capture-editor/omarchy_capture_editor.lua"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+reload_hyprland() {
+  if [[ "${OMARCHY_CAPTURE_EDITOR_SKIP_RELOAD:-0}" == "1" ]]; then
+    return 0
+  fi
+  if ! command -v hyprctl >/dev/null || ! hyprctl version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  hyprctl reload >/dev/null
+  local errors
+  errors="$(hyprctl configerrors)"
+  if [[ -n "$errors" && "$errors" != *"no errors"* ]]; then
+    printf 'omarchy-capture-editor-setup: Hyprland rejected the integration:\n%s\n' "$errors" >&2
+    return 1
+  fi
+}
+
+rollback() {
+  if [[ -n "$backup_hyprland" ]]; then
+    install -m 644 -- "$backup_hyprland" "$hyprland"
+  fi
+  if [[ -n "$backup_module" ]]; then
+    install -m 644 -- "$backup_module" "$target"
+  elif (( ! module_existed )); then
+    rm -f -- "$target"
+  fi
+  hyprctl reload >/dev/null 2>&1 || true
+}
+
+mkdir -p -- "$hypr_dir"
+
+if (( remove )); then
+  backup_module_file
+  if grep -Fqx -- "$require_line" "$hyprland"; then
+    backup_hyprland_file
+    temporary="$(mktemp "${hyprland}.tmp.XXXXXX")"
+    grep -Fvx -e "$require_line" -e "-- Omarchy Capture Editor" -- "$hyprland" >"$temporary" || true
+    install -m 644 -- "$temporary" "$hyprland"
+    rm -f -- "$temporary"
+  fi
+  rm -f -- "$target"
+  if ! reload_hyprland; then
+    rollback
+    exit 1
+  fi
+  printf 'Removed Omarchy Capture Editor Hyprland integration\n'
+  exit 0
+fi
+
+source_module="$(find_module)" || {
+  printf 'omarchy-capture-editor-setup: installed Hyprland module not found\n' >&2
+  exit 1
+}
+module_changed=1
+if [[ -f "$target" ]] && cmp -s -- "$source_module" "$target"; then
+  module_changed=0
+fi
+require_missing=0
+if ! grep -Fqx -- "$require_line" "$hyprland"; then
+  require_missing=1
+fi
+
+if (( ! module_changed && ! require_missing )); then
+  printf 'Omarchy Capture Editor integration is already installed\n'
+  exit 0
+fi
+
+if (( module_changed )); then
+  backup_module_file
+  install -m 644 -- "$source_module" "$target"
+fi
+if (( require_missing )); then
+  backup_hyprland_file
+  printf '\n%s\n' "$require_line" >>"$hyprland"
+fi
+
+if ! reload_hyprland; then
+  rollback
+  exit 1
+fi
+
+printf 'Installed Omarchy Capture Editor: PRINT -> omarchy-capture-editor\n'
+if [[ -n "$backup_hyprland" ]]; then
+  printf 'Hyprland backup: %s\n' "$backup_hyprland"
+fi

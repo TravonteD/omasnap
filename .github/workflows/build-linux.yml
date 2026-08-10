@@ -25,6 +25,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Check installer scripts
+        run: bash -n install-omarchy omarchy-capture-editor-setup
+
       - name: Configure release build
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
@@ -38,6 +41,21 @@ jobs:
 
       - name: Stage installation
         run: cmake --install build --prefix "$PWD/stage/usr"
+      - name: Run Omarchy setup smoke
+        run: |
+          fixture="$PWD/setup-fixture"
+          mkdir -p "$fixture/config/hypr"
+          printf '%s\n' 'require("default.hypr.omarchy")' > "$fixture/config/hypr/hyprland.lua"
+          export HOME="$fixture/home"
+          export XDG_CONFIG_HOME="$fixture/config"
+          export XDG_DATA_HOME="$PWD/stage/usr/share"
+          export OMARCHY_CAPTURE_EDITOR_SKIP_RELOAD=1
+          ./stage/usr/bin/omarchy-capture-editor-setup
+          ./stage/usr/bin/omarchy-capture-editor-setup
+          test "$(grep -Fxc 'require("hypr.omarchy_capture_editor")' "$fixture/config/hypr/hyprland.lua")" -eq 1
+          ./stage/usr/bin/omarchy-capture-editor-setup --remove
+          test ! -e "$fixture/config/hypr/omarchy_capture_editor.lua"
+          ! grep -Fq 'hypr.omarchy_capture_editor' "$fixture/config/hypr/hyprland.lua"
 
       - name: Package Linux artifact
         run: |

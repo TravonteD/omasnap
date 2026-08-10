@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(omarchy-capture-editor VERSION 1.0.0 LANGUAGES C CXX)
+include(GNUInstallDirs)
 
 find_package(PkgConfig REQUIRED)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
@@ -83,11 +84,19 @@ target_link_libraries(omarchy-capture-editor-smoke PRIVATE
   PkgConfig::WaylandClient
 )
 
-install(TARGETS omarchy-capture-editor RUNTIME DESTINATION bin)
+install(TARGETS omarchy-capture-editor
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+install(PROGRAMS omarchy-capture-editor-setup
+  DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+install(FILES hypr/omarchy_capture_editor.lua
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/omarchy-capture-editor"
+)
 install(FILES assets/OFL.txt
-  DESTINATION share/licenses/omarchy-capture-editor
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/omarchy-capture-editor"
   RENAME Neucha-OFL.txt
 )
 install(FILES omarchy-capture-editor.desktop
-  DESTINATION share/applications
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
 )

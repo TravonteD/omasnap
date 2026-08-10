@@ -36,10 +36,39 @@ Runtime commands used by the application:
 - `omarchy-notification-send` when available; notification failure does not invalidate a
   completed capture
 
-## Install on Omarchy or Arch Linux
+## Install on Omarchy
 
-Omarchy already provides most runtime dependencies. Install the complete build/runtime
-set explicitly when preparing a clean Arch system:
+Clone the repository and run the Omarchy installer:
+
+```bash
+git clone <repository-url> omarchy-capture-editor
+cd omarchy-capture-editor
+./install-omarchy
+```
+
+The installer uses Omarchy's package helper for missing dependencies, builds in
+`~/.cache/omarchy-capture-editor`, installs under `~/.local`, and runs
+`omarchy-capture-editor-setup`. The setup helper creates its own
+`~/.config/hypr/omarchy_capture_editor.lua` module and appends one guarded `require(...)`
+line to `hyprland.lua` after making a timestamped backup. A pre-existing
+`personal_bindings.lua` is not required.
+
+`omarchy plugin add` is intentionally not used. Omarchy plugins are Quickshell QML
+extensions; they do not install native executables or system packages. A dummy shell plugin
+would add a second installation mechanism without helping the screenshot workflow.
+
+To remove only the Hyprland integration:
+
+```bash
+omarchy-capture-editor-setup --remove
+```
+
+Set `OMARCHY_CAPTURE_PREFIX` before running `install-omarchy` to use a prefix other than
+`~/.local`.
+
+### Manual Arch Linux build
+
+Install the complete build/runtime dependency set:
 
 ```bash
 sudo pacman -S --needed \
@@ -48,22 +77,23 @@ sudo pacman -S --needed \
   tesseract tesseract-data-eng
 ```
 
-Build and install under `~/.local`:
+Build and install:
 
 ```bash
-git clone <repository-url> omarchy-capture-editor
-cd omarchy-capture-editor
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$HOME/.local"
 cmake --build build --parallel
 cmake --install build
+omarchy-capture-editor-setup  # Omarchy integration; omit on other desktops
 ```
 
 The install step places:
 
 - `~/.local/bin/omarchy-capture-editor`
+- `~/.local/bin/omarchy-capture-editor-setup`
 - `~/.local/share/applications/omarchy-capture-editor.desktop`
+- `~/.local/share/omarchy-capture-editor/omarchy_capture_editor.lua`
 - `~/.local/share/licenses/omarchy-capture-editor/Neucha-OFL.txt`
 
 Ensure `~/.local/bin` is on `PATH`, then verify the installed CLI:
@@ -111,50 +141,23 @@ OMARCHY_OCR_LANGS="eng+deu" omarchy-capture-editor
 Install the corresponding Tesseract language data before adding a language to
 `OMARCHY_OCR_LANGS`.
 
-## Hook into standard Omarchy bindings
+## Standard Omarchy binding
 
-Standard Omarchy binds only the unmodified `PRINT` chord to
-`omarchy-capture-screenshot`. Its modified Print chords are separate actions:
+Standard Omarchy binds unmodified `PRINT` to `omarchy-capture-screenshot`. Its modified
+Print chords remain separate actions:
 
 - `ALT + PRINT`: screen recording
 - `SUPER + PRINT`: color picker
 - `SUPER + CTRL + PRINT`: one-shot OCR
 
-Override only the exact standard screenshot chord. Do not edit files under
-`/usr/share/omarchy/` and do not add `SUPER + SHIFT + S`; standard Omarchy assigns that
-chord to Google Maps.
-
-Create `~/.config/hypr/personal_bindings.lua`:
+`omarchy-capture-editor-setup` overrides only the exact standard screenshot chord. It
+installs this dedicated module:
 
 ```lua
-local capture_editor = "omarchy-capture-editor"
-
--- Remove the standard plain-Print screenshot action before replacing it.
--- Modifier variants such as ALT+PRINT remain intact.
+-- ~/.config/hypr/omarchy_capture_editor.lua
 hl.unbind("PRINT")
-o.bind("PRINT", "Screenshot", capture_editor)
-```
+o.bind("PRINT", "Screenshot", "omarchy-capture-editor")
 
-Load that file **after** Omarchy's defaults in `~/.config/hypr/hyprland.lua`. A typical
-ordering is:
-
-```lua
-require("default.hypr.omarchy")
-
-require("hypr.monitors")
-require("hypr.input")
-require("hypr.bindings")
-require("hypr.personal_bindings")
-require("hypr.workspaces")
-require("hypr.looknfeel")
-require("hypr.autostart")
-```
-
-The editor is a layer-shell surface, not a normal Hyprland window. Add this rule near the
-bottom of `~/.config/hypr/hyprland.lua` to remove compositor transition frames during the
-frozen-screen handoff:
-
-```lua
 hl.layer_rule({
   match = { namespace = "^omarchy-capture-editor$" },
   no_anim = true,
@@ -162,16 +165,21 @@ hl.layer_rule({
 })
 ```
 
-Apply and verify:
+The helper appends `require("hypr.omarchy_capture_editor")` to `hyprland.lua`, after
+Omarchy's defaults have already loaded. Re-running it is idempotent. It neither creates nor
+depends on `personal_bindings.lua`, and it does not claim `SUPER + SHIFT + S` or any other
+nonstandard screenshot chord.
+
+Verify the live result:
 
 ```bash
-hyprctl reload
 hyprctl configerrors
-omarchy menu keybindings --print
+hyprctl binds -j | jq -c \
+  '[.[] | select(.description == "Screenshot") | {modmask,key,description}]'
 ```
 
-`hyprctl configerrors` should print nothing, and the keybinding menu should show
-`PRINT → Screenshot`.
+`hyprctl configerrors` should print nothing; the binding query should return exactly one
+entry with `modmask: 0` and `key: "PRINT"`.
 
 ## Controls
 
@@ -225,9 +233,10 @@ The smoke executable exercises region/window/fullscreen startup modes, capture s
 annotation tools, vector movement and scaling, text editing, OCR, native-DPI output, and
 external crop handles.
 
-`.github/workflows/build-linux.yml` performs the same release build and smoke run in an
-Arch Linux container, stages the CMake installation, and uploads a versioned Linux
-artifact. A `v*` tag also attaches the artifact to the corresponding GitHub release.
+`.github/workflows/build-linux.yml` performs the same release build and interaction smoke
+in an Arch Linux container, stages the CMake installation, and verifies that the Omarchy
+setup is idempotent and removable. It uploads a versioned Linux artifact; a `v*` tag also
+attaches that artifact to the corresponding GitHub release.
 
 ## Acknowledgements
 
