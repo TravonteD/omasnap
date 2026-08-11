@@ -38,6 +38,7 @@ public:
     Arrow,
     Line,
     Freehand,
+    Highlighter,
     Marker,
     Rectangle,
     Text,
