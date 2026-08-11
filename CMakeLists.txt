@@ -30,6 +30,8 @@ endforeach()
 
 qt_add_executable(omasnap
   main.cpp
+  icons.cpp
+  icons.hpp
   capture.cpp
   capture.hpp
   surface-capture.cpp
@@ -60,6 +62,8 @@ target_link_libraries(omasnap PRIVATE
 
 qt_add_executable(omasnap-pin
   pin.cpp
+  icons.cpp
+  icons.hpp
 )
 target_compile_features(omasnap-pin PRIVATE cxx_std_23)
 target_compile_options(omasnap-pin PRIVATE -Wall -Wextra -Wpedantic)
@@ -67,10 +71,13 @@ target_link_libraries(omasnap-pin PRIVATE
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
+  LayerShellQt::Interface
 )
 
 qt_add_executable(omasnap-smoke
   editor-smoke.cpp
+  icons.cpp
+  icons.hpp
   transform-smoke.cpp
   transform-smoke.hpp
   capture.cpp

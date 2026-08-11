@@ -1,15 +1,27 @@
+#include "icons.hpp"
+
+#include <LayerShellQt/Window>
 #include <QApplication>
 #include <QBuffer>
+#include <QDir>
+#include <QDrag>
 #include <QEnterEvent>
+#include <QFile>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
 #include <QProcess>
 #include <QScreen>
 #include <QTimer>
+
+#include <QMargins>
+#include <QUrl>
 #include <QWheelEvent>
 #include <QWidget>
 #include <QWindow>
@@ -19,11 +31,26 @@
 
 namespace {
 
+// Prefer the sibling binary so an uninstalled build tree edits with the same
+// build's editor instead of an older installed one.
+QString omasnapBinary() {
+  const QString sibling = QDir(QCoreApplication::applicationDirPath())
+                              .filePath(QStringLiteral("omasnap"));
+  return QFileInfo::exists(sibling) ? sibling : QStringLiteral("omasnap");
+}
+
 constexpr int kMinimumEdge = 80;
 constexpr qreal kCloseButtonSize = 22;
 constexpr qreal kCloseButtonInset = 8;
-constexpr qreal kResizeGripSize = 18;
-constexpr qreal kInitialScreenShare = 0.4;
+constexpr qreal kControlGap = 6;
+constexpr qreal kDragButtonWidth = kCloseButtonSize * 2 + kControlGap;
+constexpr qreal kCornerMargin = 14;
+constexpr qreal kInitialScreenShare = 0.3;
+
+// Hard caps for the corner pin: never wider than a third of the screen nor
+// taller than half.
+constexpr qreal kMaxWidthShare = 1.0 / 3.0;
+constexpr qreal kMaxHeightShare = 0.5;
 constexpr qreal kWheelStep = 0.1;
 constexpr int kToastMs = 1200;
 
@@ -56,9 +83,30 @@ bool copyPngToClipboard(const QImage &image, QString &error) {
   return true;
 }
 
+bool copyTextToClipboard(const QString &text, QString &error) {
+  QProcess copy;
+  copy.start(
+      QStringLiteral("wl-copy"),
+      {QStringLiteral("--type"), QStringLiteral("text/plain;charset=utf-8")});
+  if (!copy.waitForStarted(2000)) {
+    error = copy.errorString();
+    return false;
+  }
+  copy.write(text.toUtf8());
+  copy.closeWriteChannel();
+  if (!copy.waitForFinished(5000) || copy.exitCode() != 0) {
+    error = QString::fromUtf8(copy.readAllStandardError()).trimmed();
+    if (error.isEmpty())
+      error = QStringLiteral("wl-copy failed");
+    return false;
+  }
+  return true;
+}
+
 class PinWindow final : public QWidget {
 public:
-  explicit PinWindow(QImage image) : image_(std::move(image)) {
+  explicit PinWindow(QImage image, QString path)
+      : image_(std::move(image)), path_(std::move(path)) {
     setWindowTitle(QStringLiteral("omasnap-pin"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     setMouseTracking(true);
@@ -75,17 +123,36 @@ protected:
     if (!hovered_)
       return;
 
-    const QRectF close = closeButtonRect();
     painter.setRenderHint(QPainter::Antialiasing, true);
+    drawControlButton(painter, dragButtonRect(), QStringLiteral("drag-handle"));
+    drawControlButton(painter, editButtonRect(), QStringLiteral("edit"));
+    drawControlButton(painter, pathButtonRect(), QStringLiteral("path"));
+    drawControlButton(painter, copyButtonRect(), QStringLiteral("copy"));
+    drawControlButton(painter, closeButtonRect(), QStringLiteral("close"));
+    if (!hoverTip_.isEmpty())
+      paintHoverTip(painter);
+  }
+
+  // Layer surfaces cannot reliably map an independent QToolTip toplevel, so
+  // the hint is drawn inside the window like the toast pill.
+  void paintHoverTip(QPainter &painter) const {
+    const QFontMetrics metrics(painter.font());
+    const qreal width = metrics.horizontalAdvance(hoverTip_) + 22;
+    const QRectF pill(std::max(0.0, this->width() - width - kCloseButtonInset),
+                      kCloseButtonInset + kCloseButtonSize + 5, width, 22);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(12, 12, 16, 210));
+    painter.drawRoundedRect(pill, 11, 11);
+    painter.setPen(QColor(240, 240, 245));
+    painter.drawText(pill, Qt::AlignCenter, hoverTip_);
+  }
+
+  void drawControlButton(QPainter &painter, const QRectF &rect,
+                         const QString &action) const {
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(12, 12, 16, 190));
-    painter.drawRoundedRect(close, 6, 6);
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor(255, 255, 255, 225), 1.6));
-    const QPointF center = close.center();
-    const qreal arm = 4.5;
-    painter.drawLine(center + QPointF(-arm, -arm), center + QPointF(arm, arm));
-    painter.drawLine(center + QPointF(arm, -arm), center + QPointF(-arm, arm));
+    painter.drawRoundedRect(rect, 6, 6);
+    drawToolbarIcon(painter, rect, action, {}, QColor(245, 245, 247));
   }
 
   void paintToast(QPainter &painter) const {
@@ -102,26 +169,78 @@ protected:
   }
 
   void mousePressEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::MiddleButton ||
-        closeButtonRect().contains(event->position())) {
+    if (event->button() == Qt::MiddleButton) {
       close();
       return;
     }
-    if (event->button() != Qt::LeftButton)
-      return;
+    const QPointF position = event->position();
+    if (event->button() == Qt::LeftButton) {
+      if (closeButtonRect().contains(position)) {
+        close();
+        return;
+      }
+      if (dragButtonRect().contains(position)) {
+        beginFileDrag();
+        return;
+      }
+      if (copyButtonRect().contains(position)) {
+        QString error;
+        showToast(copyPngToClipboard(image_, error)
+                      ? QStringLiteral("Copied to clipboard")
+                      : error);
+        return;
+      }
+      if (pathButtonRect().contains(position)) {
+        QString error;
+        showToast(copyTextToClipboard(path_, error)
+                      ? QStringLiteral("Copied path")
+                      : error);
+        return;
+      }
+      if (editButtonRect().contains(position)) {
+        reopenInEditor();
+        return;
+      }
+    }
+  }
 
-    QWindow *handle = windowHandle();
-    if (!handle)
-      return;
-    if (resizeGripRect().contains(event->position()))
-      handle->startSystemResize(Qt::BottomEdge | Qt::RightEdge);
+  // Send the pinned image back to the omasnap editor, replacing the pin.
+  void reopenInEditor() {
+    if (!QProcess::startDetached(omasnapBinary(), {path_}))
+      showToast(QStringLiteral("Could not start omasnap"));
     else
-      handle->startSystemMove();
+      close();
   }
 
   void mouseMoveEvent(QMouseEvent *event) override {
-    setCursor(resizeGripRect().contains(event->position()) ? Qt::SizeFDiagCursor
-                                                           : Qt::ArrowCursor);
+    const QPointF position = event->position();
+    setCursor(controlRectAt(position) >= 0 ? Qt::PointingHandCursor
+                                           : Qt::ArrowCursor);
+
+    const int control = controlRectAt(position);
+    if (control != hoveredControl_) {
+      hoveredControl_ = control;
+      hoverTip_ = control >= 0 ? controlTip(control) : QString();
+      update();
+    }
+  }
+
+  // A layer surface can still initiate a Wayland uri-list drag just like a
+  // file manager; the six-dot control is the drag handle.
+  void beginFileDrag() {
+    QMimeData *mime = new QMimeData;
+    const QList<QUrl> urls{QUrl::fromLocalFile(path_)};
+    mime->setUrls(urls);
+    mime->setText(urls.constFirst().toLocalFile());
+    QFile file(path_);
+    if (file.open(QIODevice::ReadOnly))
+      mime->setData(QStringLiteral("image/png"), file.readAll());
+
+    QDrag *drag = new QDrag(this);
+    drag->setMimeData(mime);
+    drag->setPixmap(QPixmap::fromImage(image_.scaled(
+        256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    drag->exec(Qt::CopyAction | Qt::MoveAction);
   }
 
   void wheelEvent(QWheelEvent *event) override {
@@ -129,7 +248,12 @@ protected:
     if (steps == 0)
       return;
     const qreal factor = steps > 0 ? 1 + kWheelStep : 1 - kWheelStep;
-    resize(scaledSize(qRound(width() * factor)));
+    const QSize nextSize = scaledSize(qRound(width() * factor));
+    resize(nextSize);
+    if (QWindow *handle = windowHandle()) {
+      if (LayerShellQt::Window *layer = LayerShellQt::Window::get(handle))
+        layer->setDesiredSize(nextSize);
+    }
     event->accept();
   }
 
@@ -150,16 +274,36 @@ protected:
 
   void enterEvent(QEnterEvent *) override {
     hovered_ = true;
+    hoveredControl_ = -1;
     update();
   }
 
   void leaveEvent(QEvent *) override {
     hovered_ = false;
+    hoveredControl_ = -1;
+    hoverTip_.clear();
     setCursor(Qt::ArrowCursor);
     update();
   }
 
 private:
+  [[nodiscard]] QString controlTip(int index) const {
+    switch (index) {
+    case 0:
+      return QStringLiteral("Close · Esc or middle-click");
+    case 1:
+      return QStringLiteral("Copy image to clipboard");
+    case 2:
+      return QStringLiteral("Copy file path");
+    case 3:
+      return QStringLiteral("Edit in omasnap");
+    case 4:
+      return QStringLiteral("Drag this image out");
+    default:
+      return {};
+    }
+  }
+
   [[nodiscard]] QSize availableSize() const {
     const QScreen *target =
         screen() ? screen() : QGuiApplication::primaryScreen();
@@ -180,19 +324,23 @@ private:
     return scaledSize(qRound(logical.width() * fit));
   }
 
+  // Fit a target width into the max width/height caps while keeping the
+  // capture's aspect ratio.
   [[nodiscard]] QSize scaledSize(int targetWidth) const {
+    const qreal aspect = image_.height() / static_cast<qreal>(image_.width());
     const QSize available = availableSize();
-    const int maximumWidth = std::max(
-        kMinimumEdge,
-        qRound(image_.height() >= image_.width()
-                   ? available.height() * static_cast<qreal>(image_.width()) /
-                         image_.height()
-                   : available.width()));
-    const int clamped = std::clamp(targetWidth, kMinimumEdge, maximumWidth);
-    const int height = std::max(
-        kMinimumEdge,
-        qRound(clamped * static_cast<qreal>(image_.height()) / image_.width()));
-    return QSize(clamped, height);
+    const qreal maxW =
+        std::max<qreal>(kMinimumEdge, available.width() * kMaxWidthShare);
+    const qreal maxH =
+        std::max<qreal>(kMinimumEdge, available.height() * kMaxHeightShare);
+    qreal width = std::clamp(static_cast<qreal>(targetWidth),
+                             static_cast<qreal>(kMinimumEdge), maxW);
+    qreal height = width * aspect;
+    if (height > maxH) {
+      height = maxH;
+      width = height / aspect;
+    }
+    return QSize(qRound(width), qRound(height));
   }
 
   void showToast(QString message) {
@@ -204,28 +352,52 @@ private:
     });
   }
 
-  [[nodiscard]] QRectF closeButtonRect() const {
-    return QRectF(width() - kCloseButtonSize - kCloseButtonInset,
-                  kCloseButtonInset, kCloseButtonSize, kCloseButtonSize);
+  // The wide drag handle stands alone in the top-left; edit, path, copy, and
+  // close remain grouped in the top-right.
+  [[nodiscard]] QRectF closeButtonRect() const { return controlRect(0); }
+
+  [[nodiscard]] QRectF copyButtonRect() const { return controlRect(1); }
+
+  [[nodiscard]] QRectF pathButtonRect() const { return controlRect(2); }
+
+  [[nodiscard]] QRectF editButtonRect() const { return controlRect(3); }
+
+  [[nodiscard]] QRectF dragButtonRect() const { return controlRect(4); }
+
+  [[nodiscard]] QRectF controlRect(int index) const {
+    const qreal right = width() - kCloseButtonSize - kCloseButtonInset;
+    if (index < 4) {
+      return QRectF(right - index * (kCloseButtonSize + kControlGap),
+                    kCloseButtonInset, kCloseButtonSize, kCloseButtonSize);
+    }
+    return QRectF(kCloseButtonInset, kCloseButtonInset, kDragButtonWidth,
+                  kCloseButtonSize);
   }
 
-  [[nodiscard]] QRectF resizeGripRect() const {
-    return QRectF(width() - kResizeGripSize, height() - kResizeGripSize,
-                  kResizeGripSize, kResizeGripSize);
+  [[nodiscard]] int controlRectAt(const QPointF &position) const {
+    for (int index = 0; index < 5; ++index) {
+      if (controlRect(index).contains(position))
+        return index;
+    }
+    return -1;
   }
 
   QImage image_;
+  QString path_;
   QString toast_;
+  QString hoverTip_;
   bool hovered_ = false;
+  int hoveredControl_ = -1;
 };
 
 } // namespace
 
 int main(int argc, char **argv) {
-  // The capture process exports this for its own layer-shell overlay;
-  // inheriting it here would turn the pin into a layer surface with no window
-  // rules.
-  qunsetenv("QT_WAYLAND_SHELL_INTEGRATION");
+  // Unlike the capture overlay's full-screen layer, the pin is a small
+  // layer-shell surface anchored to the bottom-right. Layer surfaces are
+  // natively visible on every desktop, so the pin needs no compositor
+  // window rules, and its size stays within the caps set by the window.
+  qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
   QCoreApplication::setApplicationName(QStringLiteral("omasnap-pin"));
   QGuiApplication::setDesktopFileName(QStringLiteral("omasnap-pin"));
   QApplication application(argc, argv);
@@ -241,7 +413,28 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  PinWindow window(std::move(image));
+  PinWindow window(std::move(image), arguments.at(1));
+  static_cast<void>(window.winId());
+  QWindow *handle = window.windowHandle();
+  LayerShellQt::Window *layer =
+      handle ? LayerShellQt::Window::get(handle) : nullptr;
+  if (!handle || !layer) {
+    qCritical("omasnap-pin: could not create layer surface");
+    return 1;
+  }
+
+  layer->setScope(QStringLiteral("omasnap-pin"));
+  LayerShellQt::Window::Anchors anchors;
+  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
+  anchors.setFlag(LayerShellQt::Window::AnchorRight);
+  layer->setAnchors(anchors);
+  layer->setMargins(QMargins(0, 0, kCornerMargin, kCornerMargin));
+  layer->setExclusiveZone(0);
+  layer->setDesiredSize(window.size());
+  layer->setKeyboardInteractivity(
+      LayerShellQt::Window::KeyboardInteractivityOnDemand);
+  layer->setActivateOnShow(false);
+  layer->setLayer(LayerShellQt::Window::LayerOverlay);
   window.show();
   return application.exec();
 }

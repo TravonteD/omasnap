@@ -18,8 +18,8 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - Per-layer preset or custom colors (including highlighter ink), undo/redo history,
   OCR-region capture,
   mesh-gradient backdrops, and rendered drop shadows.
-- Pin a finished capture on screen as a floating always-on-top window (`omasnap-pin`),
-  independent of the capture process so new captures keep working.
+- Pin a finished capture as a bottom-right always-on-top layer surface (`omasnap-pin`),
+  visible on every workspace and independent of the capture process.
 - Crash-resistant working snapshots under `/run/user/<UID>/omasnap/` (falling back to
   a private `/tmp/omasnap-<UID>/`), written immediately after selection and overwritten
   after every completed edit. Saving moves that file into `~/Pictures/Screenshots`;
@@ -209,45 +209,30 @@ Install the corresponding Tesseract language data before adding a language to
 ### Pinned captures
 
 `P` renders the current capture, writes it to a `pin-<pid>-<n>.png` under the runtime
-snapshot directory, and hands it to `omasnap-pin` — a separate binary that deliberately
-runs without
-`QT_WAYLAND_SHELL_INTEGRATION`, so the pin is a plain toplevel the compositor can float,
-stack, and move like any other window. Pinning neither touches the clipboard nor writes to
-the screenshot directory; it is a fourth output alongside copy, save, and copy-and-save.
+snapshot directory, and hands it to `omasnap-pin`. The separate layer-shell surface is
+anchored 14 logical pixels from the bottom-right corner and stays visible on every
+workspace without compositor window rules. It preserves the image aspect ratio, with a
+maximum width of one third of the screen and a maximum height of one half.
 
-`P` closes the editor, which releases the single-instance lock so the next capture starts
-immediately. Pins from separate captures accumulate; each one is an independent process.
+Pinning neither touches the clipboard nor writes to the screenshot directory; it is a
+fourth output alongside copy, save, and copy-and-save. `P` closes the editor and releases
+the single-instance lock immediately. Pins from separate captures accumulate as independent
+processes.
+
+Hover the pin to reveal its controls:
 
 | Input on a pin | Action |
 |---|---|
-| Drag body | Move (compositor-driven `startSystemMove`) |
-| Wheel, bottom-right grip | Resize, aspect preserved |
-| `Ctrl+C` | Copy the pinned PNG to the clipboard |
-| `Esc`, middle-click, hover close button | Close |
+| Edit button | Reopen the full-resolution PNG in Omasnap and replace the pin |
+| Link button | Copy the source file path |
+| Copy button, `Ctrl+C` | Copy the full-resolution PNG |
+| Double-wide top-left drag handle | Drag the PNG into a file-capable drop target |
+| Wheel | Resize within the screen caps, preserving aspect ratio |
+| Close button, `Esc`, middle-click | Close |
 
-`Ctrl+C` copies through `wl-copy` rather than `QClipboard`, so the image stays on the
-clipboard after the pin is closed, and it copies the capture at full resolution regardless
-of how small the pin has been scaled.
-
-Recommended window rules, in the Lua config syntax these were tested with:
-
-```lua
-hl.window_rule({
-  match = { class = "^omasnap-pin$" },
-  float = true,
-  pin = true,
-  no_initial_focus = true,
-  no_dim = true,
-  keep_aspect_ratio = true,
-  opacity = "1 1 override",
-})
-```
-
-The `override` on the opacity rule matters: without it a configured
-`decoration:inactive_opacity` still multiplies through, and an unfocused pin then shows
-colors that no longer match the capture. In a legacy `hyprland.conf` the equivalents are
-`float`, `pin`, `noinitialfocus`, `nodim`, `keepaspectratio` and
-`opacity 1.0 1.0 override` on `class:^omasnap-pin$`.
+Image and path copying use `wl-copy` rather than `QClipboard`, so clipboard data remains
+available after the pin is closed. No font-based symbol set or compositor-specific window
+rule is required; the controls use the same vector icon renderer as the annotation toolbar.
 
 Creation tools return to Select after one placement without selecting the new layer. In
 Select mode, arrows and lines show only their two endpoint handles; other layers show a
