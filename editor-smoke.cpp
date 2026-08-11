@@ -13,6 +13,8 @@
 #include <QWheelEvent>
 #include <QtTest/QTest>
 
+#include <algorithm>
+
 namespace {
 /** Guards the working-snapshot lifecycle: create and overwrite in place. */
 bool runTemporarySnapshotChecks(QString &error) {
@@ -60,6 +62,51 @@ bool runTemporarySnapshotChecks(QString &error) {
   QFile::remove(path);
   return true;
 }
+
+bool runHighlighterRenderingCheck(QString &error) {
+  error = QStringLiteral("Highlighter rendering check failed");
+  CaptureData capture;
+  capture.monitor.scale = 1.0;
+  capture.monitor.pixelSize = {200, 100};
+  // Transparent canvas: the selected capture is composited underneath, so a
+  // white source would make every alpha check read 255.
+  capture.source = QImage(200, 100, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(Qt::transparent);
+  capture.preview = capture.source;
+
+  Annotation highlight;
+  highlight.kind = Annotation::Kind::Highlighter;
+  highlight.color = QColor(QStringLiteral("#ffd60a"));
+  highlight.size = 4;
+  highlight.points = {{50, 50}, {90, 50}, {130, 50}, {170, 50}};
+  const QImage rendered =
+      renderCapture(capture, QRectF(0, 0, 200, 100), {highlight},
+                    BackgroundStyle::None);
+  if (rendered.isNull())
+    return false;
+
+  int midAlpha = 0;
+  bool ok = true;
+  for (const int x : {60, 90, 120, 150}) {
+    const int a = rendered.pixelColor(x, 50).alpha();
+    midAlpha = std::max(midAlpha, a);
+    if (a < 96 || a > 160)
+      ok = false; // translucent middle of the stroke
+  }
+  for (const int offset : {-5, 5}) {
+    if (rendered.pixelColor(100, 50 + offset).alpha() <= 0)
+      ok = false; // width ~= size*3 keeps the band opaque enough
+  }
+  if (rendered.pixelColor(10, 50).alpha() != 0)
+    ok = false; // untouched area stays transparent
+  if (midAlpha == 255)
+    ok = false; // highlight must blend, not paint solid
+  if (!ok) {
+    error = QStringLiteral("Highlighter stroke was not translucent/wide");
+    return false;
+  }
+  return true;
+}
 } // namespace
 /** Runs the interaction and rendering smoke checks. */
 int main(int argc, char **argv) {
@@ -70,6 +117,10 @@ int main(int argc, char **argv) {
   if (!runTemporarySnapshotChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 68;
+  }
+  if (!runHighlighterRenderingCheck(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 69;
   }
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
