@@ -10,10 +10,64 @@
 #include <QWheelEvent>
 #include <QtTest/QTest>
 
+namespace {
+/** Guards the working-snapshot lifecycle: create and overwrite in place. */
+bool runTemporarySnapshotChecks(QString &error) {
+  const QString path = temporarySnapshotPath();
+  QImage firstImage(64, 64, QImage::Format_ARGB32_Premultiplied);
+  firstImage.fill(QColor(QStringLiteral("#123456")));
+  // PNG loading yields straight-alpha ARGB32; compare in our paint format so
+  // pixel equality alone decides the outcome.
+  const auto reload = [](const QString &file) {
+    return QImage(file).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  };
+  if (!saveTemporarySnapshot(firstImage, path, error) ||
+      reload(path) != firstImage || reload(path).isNull()) {
+    if (error.isEmpty())
+      error = QStringLiteral("Snapshot reload did not match the saved image");
+    return false;
+  }
+
+  QImage secondImage(64, 64, QImage::Format_ARGB32_Premultiplied);
+  secondImage.fill(QColor(QStringLiteral("#654321")));
+  if (!saveTemporarySnapshot(secondImage, path, error))
+    return false; // O_EXCL used to fail on the second call.
+  if (reload(path) != secondImage) {
+    error = QStringLiteral("Overwritten snapshot did not replace the first");
+    return false;
+  }
+
+  const QFileInfo fileInfo(path);
+  // The runtime directory must stay private and the snapshot must not be
+  // readable by group or other.
+  const QFileInfo dirInfo = QFileInfo(fileInfo.absolutePath());
+  const QFileDevice::Permissions owner = QFileDevice::ReadOwner |
+                                         QFileDevice::WriteOwner |
+                                         QFileDevice::ExeOwner;
+  const QFileDevice::Permissions shared = QFileDevice::ReadGroup |
+                                          QFileDevice::WriteGroup |
+                                          QFileDevice::ExeGroup |
+                                          QFileDevice::ReadOther |
+                                          QFileDevice::WriteOther |
+                                          QFileDevice::ExeOther;
+  if ((dirInfo.permissions() & owner) != owner ||
+      (dirInfo.permissions() & shared) != 0 ||
+      (fileInfo.permissions() & shared) != 0)
+    return false;
+  QFile::remove(path);
+  return true;
+}
+} // namespace
+
 int main(int argc, char **argv) {
   QApplication application(argc, argv);
   if (!loadCaptureFonts())
     return 17;
+  QString snapshotError;
+  if (!runTemporarySnapshotChecks(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 68;
+  }
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath())
