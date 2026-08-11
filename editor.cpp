@@ -237,10 +237,13 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     sendCaptureNotification(QStringLiteral("Copied text from screenshot"));
   });
 
-  if (mode == CaptureMode::Fullscreen) {
+  if (mode == CaptureMode::Fullscreen || mode == CaptureMode::File) {
     selection_ = QRectF(QPointF(), capture_.preview.size());
-    enterEdit(QStringLiteral(
-        "Full screen selected · native resolution · outer handles crop"));
+    enterEdit(mode == CaptureMode::File
+                  ? QStringLiteral(
+                        "Editing image from file · Copy/Save to output")
+                  : QStringLiteral("Full screen selected · native resolution · "
+                                   "outer handles crop"));
   } else if (mode == CaptureMode::Window) {
     windowMode_ = true;
     hoveredWindow_ = windowAt(cursor_);

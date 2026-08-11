@@ -7,11 +7,13 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QLockFile>
 #include <QScreen>
 #include <QSocketNotifier>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QWindow>
 
 #include <csignal>
@@ -87,12 +89,20 @@ int main(int argc, char **argv) {
   parser.addOption(fullscreenOption);
   parser.addOption(windowOption);
   parser.addOption(regionOption);
+  const QCommandLineOption fileOption(
+      QStringLiteral("file"),
+      QStringLiteral("Open an existing image file in the annotation editor "
+                     "instead of capturing the screen."),
+      QStringLiteral("path"));
+  parser.addOption(fileOption);
   parser.addPositionalArgument(
-      QStringLiteral("mode"),
-      QStringLiteral("Optional compatibility mode: smart, region, windows, or "
-                     "fullscreen."),
-      QStringLiteral("[mode]"));
+      QStringLiteral("target"),
+      QStringLiteral("Capture mode (smart, region, windows, fullscreen) or the "
+                     "path of an image file to edit."),
+      QStringLiteral("[target]"));
   parser.process(application);
+
+  QString filePath = parser.value(fileOption);
 
   CaptureEditor::CaptureMode captureMode = CaptureEditor::CaptureMode::Region;
   int requestedModes = parser.isSet(fullscreenOption) +
@@ -104,28 +114,37 @@ int main(int argc, char **argv) {
 
   const QStringList positional = parser.positionalArguments();
   if (positional.size() > 1) {
-    qCritical() << "Only one capture mode may be specified";
+    qCritical() << "Only one capture target may be specified";
     return 2;
   }
   if (!positional.isEmpty()) {
-    ++requestedModes;
-    const QString mode = positional.first();
-    if (mode == QStringLiteral("fullscreen"))
-      captureMode = CaptureEditor::CaptureMode::Fullscreen;
-    else if (mode == QStringLiteral("windows") ||
-             mode == QStringLiteral("window"))
-      captureMode = CaptureEditor::CaptureMode::Window;
-    else if (mode == QStringLiteral("smart") ||
-             mode == QStringLiteral("region"))
-      captureMode = CaptureEditor::CaptureMode::Region;
-    else {
-      qCritical().noquote()
-          << QStringLiteral("Unknown capture mode: %1").arg(mode);
-      return 2;
+    const QFileInfo target(positional.first());
+    if (filePath.isEmpty() && target.isFile()) {
+      filePath = positional.first();
+    } else {
+      ++requestedModes;
+      const QString mode = positional.first();
+      if (mode == QStringLiteral("fullscreen"))
+        captureMode = CaptureEditor::CaptureMode::Fullscreen;
+      else if (mode == QStringLiteral("windows") ||
+               mode == QStringLiteral("window"))
+        captureMode = CaptureEditor::CaptureMode::Window;
+      else if (mode == QStringLiteral("smart") ||
+               mode == QStringLiteral("region"))
+        captureMode = CaptureEditor::CaptureMode::Region;
+      else {
+        qCritical().noquote()
+            << QStringLiteral("Unknown capture target: %1").arg(mode);
+        return 2;
+      }
     }
   }
-  if (requestedModes > 1) {
+  if (filePath.isEmpty() && requestedModes > 1) {
     qCritical() << "Capture mode options are mutually exclusive";
+    return 2;
+  }
+  if (!filePath.isEmpty() && requestedModes > 0) {
+    qCritical() << "An image file cannot be combined with a capture mode";
     return 2;
   }
   if (!loadCaptureFonts())
@@ -144,17 +163,40 @@ int main(int argc, char **argv) {
 
   CaptureData capture;
   QString error;
-  if (!captureFocusedMonitor(capture, error)) {
+  if (!filePath.isEmpty()) {
+    QString localFile = QUrl(filePath).toLocalFile();
+    if (localFile.isEmpty())
+      localFile = filePath;
+    QImage image(localFile);
+    if (image.isNull()) {
+      qCritical().noquote()
+          << QStringLiteral("Could not load image: %1").arg(filePath);
+      return 1;
+    }
+    capture.source = image;
+    capture.preview = image;
+    capture.monitor.scale = 1.0;
+    capture.monitor.pixelSize = image.size();
+    capture.monitor.geometry = QRect(QPoint(0, 0), image.size());
+    captureMode = CaptureEditor::CaptureMode::File;
+    qInfo().noquote()
+        << QStringLiteral("Opened %1 for annotation (%2x%3)")
+               .arg(localFile)
+               .arg(image.width())
+               .arg(image.height());
+  } else if (!captureFocusedMonitor(capture, error)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
   }
 
-  qInfo().noquote()
-      << QStringLiteral("Captured %1 workspace %2 with %3 selectable windows")
-             .arg(capture.monitor.name)
-             .arg(capture.monitor.workspaceId)
-             .arg(capture.windows.size());
+  if (filePath.isEmpty())
+    qInfo().noquote()
+        << QStringLiteral("Captured %1 workspace %2 with %3 selectable "
+                          "windows")
+               .arg(capture.monitor.name)
+               .arg(capture.monitor.workspaceId)
+               .arg(capture.windows.size());
 
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {

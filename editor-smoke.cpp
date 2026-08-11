@@ -460,6 +460,24 @@ int main(int argc, char **argv) {
           outputRoot + QStringLiteral("-fullscreen-editor.png"), "PNG"))
     return 16;
 
+  // File mode opens an existing image straight into the edit phase: whole
+  // image selected, arrow cursor, annotation canvas showing the pixels.
+  CaptureData fileData;
+  fileData.monitor.scale = 1.0;
+  fileData.monitor.pixelSize = {300, 200};
+  fileData.source = QImage(300, 200, QImage::Format_RGB32);
+  fileData.source.fill(QColor(QStringLiteral("#1a2b3c")));
+  fileData.preview = fileData.source;
+  CaptureEditor fileEditor(fileData, CaptureEditor::CaptureMode::File);
+  fileEditor.resize(800, 600);
+  fileEditor.show();
+  application.processEvents();
+  const QImage fileUi = fileEditor.grab().toImage();
+  if (fileEditor.cursor().shape() != Qt::ArrowCursor ||
+      fileUi.pixelColor(400, 305) != QColor(QStringLiteral("#1a2b3c")) ||
+      !fileUi.save(outputRoot + QStringLiteral("-file-mode.png"), "PNG"))
+    return 70;
+
   CaptureData windowSurfaceCapture = capture;
   windowSurfaceCapture.monitor.scale = 1.0;
   windowSurfaceCapture.monitor.pixelSize = {320, 180};

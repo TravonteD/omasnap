@@ -687,9 +687,13 @@ void sendCaptureNotification(const QString &message, const QString &imagePath) {
   if (!imagePath.isEmpty()) {
     const QString imageUrl =
         QUrl::fromLocalFile(imagePath).toString(QUrl::FullyEncoded);
-    arguments << QStringLiteral("Click to open") << QStringLiteral("--image")
+    QString omasnap = QDir(QCoreApplication::applicationDirPath())
+                          .filePath(QStringLiteral("omasnap"));
+    if (!QFileInfo::exists(omasnap))
+      omasnap = QStringLiteral("omasnap");
+    arguments << QStringLiteral("Click to edit") << QStringLiteral("--image")
               << imagePath << QStringLiteral("--exec")
-              << QStringLiteral("xdg-open %1").arg(imageUrl);
+              << QStringLiteral("%1 %2").arg(omasnap, imageUrl);
   }
   arguments << QStringLiteral("-t") << QStringLiteral("4500");
   QProcess::startDetached(QStringLiteral("omarchy-notification-send"),

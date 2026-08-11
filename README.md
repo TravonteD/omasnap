@@ -158,6 +158,21 @@ omasnap smart       # maps to region selection
 These options choose what is initially selected; the editor still controls whether the
 result is copied, saved, or both.
 
+### Edit an existing image
+
+Point omasnap at any readable image and it opens straight into the annotation editor
+with the whole image selected, skipping the screen-capture step:
+
+```bash
+omasnap ~/Pictures/Screenshots/screenshot-2026-08-11_10-00-00.png
+# or
+omasnap --file /path/to/capture.png
+```
+
+File URLs are accepted too. The capture notification's "Click to edit" action launches
+`omasnap` on the finished screenshot, so a capture can be reopened and re-annotated
+instead of being handed to an external viewer.
+
 Environment overrides:
 
 ```bash

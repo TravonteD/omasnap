@@ -15,7 +15,7 @@ class QWheelEvent;
 class QPainter;
 class CaptureEditor final : public QWidget {
 public:
-  enum class CaptureMode { Region, Window, Fullscreen };
+  enum class CaptureMode { Region, Window, Fullscreen, File };
 
   explicit CaptureEditor(CaptureData capture,
                          CaptureMode mode = CaptureMode::Region,
