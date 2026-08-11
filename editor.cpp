@@ -22,7 +22,6 @@
 #include <QPainterPath>
 #include <QProcess>
 #include <QScreen>
-#include <QStandardPaths>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -239,11 +238,11 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
 
   if (mode == CaptureMode::Fullscreen || mode == CaptureMode::File) {
     selection_ = QRectF(QPointF(), capture_.preview.size());
-    enterEdit(mode == CaptureMode::File
-                  ? QStringLiteral(
-                        "Editing image from file · Copy/Save to output")
-                  : QStringLiteral("Full screen selected · native resolution · "
-                                   "outer handles crop"));
+    enterEdit(
+        mode == CaptureMode::File
+            ? QStringLiteral("Editing image from file · Copy/Save to output")
+            : QStringLiteral("Full screen selected · native resolution · "
+                             "outer handles crop"));
   } else if (mode == CaptureMode::Window) {
     windowMode_ = true;
     hoveredWindow_ = windowAt(cursor_);
@@ -254,14 +253,11 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
 }
 
 CaptureEditor::~CaptureEditor() {
-  if (!snapshotPath_.isEmpty() && QFile::exists(snapshotPath_)) {
-    const QString runtime =
-        QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    if ((!runtime.isEmpty() && snapshotPath_.startsWith(runtime)) ||
-        snapshotPath_.contains(QStringLiteral("/omasnap"))) {
-      QFile::remove(snapshotPath_);
-    }
-  }
+  if (snapshotPath_.isEmpty() || !QFile::exists(snapshotPath_))
+    return;
+  const QString runtime = secureRuntimeDirectory();
+  if (!runtime.isEmpty() && QFileInfo(snapshotPath_).absolutePath() == runtime)
+    QFile::remove(snapshotPath_);
 }
 
 bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
@@ -744,24 +740,21 @@ void CaptureEditor::pinSnapshot() {
 
   prunePinnedSnapshots();
   const QString path = pinnedSnapshotPath(++pinCount_);
+  if (path.isEmpty()) {
+    --pinCount_;
+    setStatus(QStringLiteral("Could not create private runtime directory"));
+    return;
+  }
   const QImage image =
       renderCapture(capture_, selection_, annotations_, backgroundStyle_);
   QString error;
   if (!saveTemporarySnapshot(image, path, error)) {
     setStatus(error);
+    --pinCount_;
     return;
   }
 
-  // The capture process exports QT_WAYLAND_SHELL_INTEGRATION for its own
-  // layer-shell overlay; the pin needs a plain toplevel the compositor can
-  // float, move and stack like any other window.
-  QProcess pin;
-  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-  environment.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
-  pin.setProcessEnvironment(environment);
-  pin.setProgram(pinProgram());
-  pin.setArguments({path});
-  if (!pin.startDetached()) {
+  if (!QProcess::startDetached(pinProgram(), {path})) {
     QFile::remove(path);
     --pinCount_;
     setStatus(QStringLiteral("Could not start omasnap-pin"));
@@ -984,16 +977,13 @@ void CaptureEditor::finish(OutputMode mode) {
     snapshotPath_ = saved;
   }
 
-  const QString notificationImage = saved.isEmpty() ? snapshotPath_ : saved;
   if (mode == OutputMode::Copy)
-    sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"),
-                            notificationImage);
+    sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"));
   else if (mode == OutputMode::Save)
-    sendCaptureNotification(QStringLiteral("Screenshot saved"),
-                            notificationImage);
+    sendCaptureNotification(QStringLiteral("Screenshot saved"), saved);
   else
     sendCaptureNotification(QStringLiteral("Screenshot saved and copied"),
-                            notificationImage);
+                            saved);
   close();
 }
 

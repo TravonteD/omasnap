@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QPainter>
+#include <QTemporaryDir>
 #include <QWheelEvent>
 #include <QtTest/QTest>
 
@@ -46,19 +47,51 @@ bool runTemporarySnapshotChecks(QString &error) {
   // The runtime directory must stay private and the snapshot must not be
   // readable by group or other.
   const QFileInfo dirInfo = QFileInfo(fileInfo.absolutePath());
-  const QFileDevice::Permissions owner = QFileDevice::ReadOwner |
-                                         QFileDevice::WriteOwner |
-                                         QFileDevice::ExeOwner;
-  const QFileDevice::Permissions shared = QFileDevice::ReadGroup |
-                                          QFileDevice::WriteGroup |
-                                          QFileDevice::ExeGroup |
-                                          QFileDevice::ReadOther |
-                                          QFileDevice::WriteOther |
-                                          QFileDevice::ExeOther;
+  const QFileDevice::Permissions owner =
+      QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
+  const QFileDevice::Permissions shared =
+      QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup |
+      QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
   if ((dirInfo.permissions() & owner) != owner ||
       (dirInfo.permissions() & shared) != 0 ||
       (fileInfo.permissions() & shared) != 0)
     return false;
+  QTemporaryDir securityRoot;
+  const QString repairPath =
+      QDir(securityRoot.path()).filePath(QStringLiteral("repair-me"));
+  if (!securityRoot.isValid() || !QDir().mkdir(repairPath) ||
+      !QFile::setPermissions(repairPath, owner | shared) ||
+      !ensurePrivateDirectory(repairPath) ||
+      (QFileInfo(repairPath).permissions() & shared) != 0) {
+    error = QStringLiteral("Private directory permissions were not repaired");
+    return false;
+  }
+  const QString symlinkPath =
+      QDir(securityRoot.path()).filePath(QStringLiteral("directory-link"));
+  if (!QFile::link(repairPath, symlinkPath) ||
+      ensurePrivateDirectory(symlinkPath)) {
+    error = QStringLiteral("Private directory accepted a symbolic link");
+    return false;
+  }
+  const QString outsideDirectory =
+      QDir(securityRoot.path()).filePath(QStringLiteral("outside"));
+  const QFileDevice::Permissions visibleToGroup =
+      QFileDevice::ReadGroup | QFileDevice::ExeGroup;
+  if (!QDir().mkdir(outsideDirectory) ||
+      !QFile::setPermissions(outsideDirectory, owner | visibleToGroup)) {
+    error = QStringLiteral("Could not prepare snapshot boundary check");
+    return false;
+  }
+  error.clear();
+  const QString outsideSnapshot =
+      QDir(outsideDirectory).filePath(QStringLiteral("snapshot.png"));
+  if (saveTemporarySnapshot(secondImage, outsideSnapshot, error) ||
+      QFile::exists(outsideSnapshot) ||
+      (QFileInfo(outsideDirectory).permissions() & visibleToGroup) !=
+          visibleToGroup) {
+    error = QStringLiteral("Temporary snapshot escaped its private directory");
+    return false;
+  }
   QFile::remove(path);
   return true;
 }
@@ -79,9 +112,8 @@ bool runHighlighterRenderingCheck(QString &error) {
   highlight.color = QColor(QStringLiteral("#ffd60a"));
   highlight.size = 4;
   highlight.points = {{50, 50}, {90, 50}, {130, 50}, {170, 50}};
-  const QImage rendered =
-      renderCapture(capture, QRectF(0, 0, 200, 100), {highlight},
-                    BackgroundStyle::None);
+  const QImage rendered = renderCapture(capture, QRectF(0, 0, 200, 100),
+                                        {highlight}, BackgroundStyle::None);
   if (rendered.isNull())
     return false;
 
@@ -706,34 +738,38 @@ int main(int argc, char **argv) {
   if (editor.isVisible())
     return 25;
 
-  CaptureEditor finishEditor(capture);
-  finishEditor.resize(800, 600);
-  finishEditor.show();
-  application.processEvents();
-  QTest::mousePress(&finishEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(100, 100));
-  QTest::mouseMove(&finishEditor, QPoint(650, 470), 20);
-  QTest::mouseRelease(&finishEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(650, 470));
-  QTest::keyClick(&finishEditor, Qt::Key_C);
-  QTest::mouseClick(&finishEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(470, 300));
-  application.processEvents();
-  const QImage snapshotBeforeSave(snapshotPath);
-  if (snapshotBeforeSave.isNull())
-    return 59;
-  QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
-  application.processEvents();
-  const QStringList savedFiles =
-      QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
-          .entryList({QStringLiteral("*.png")}, QDir::Files);
-  if (finishEditor.isVisible() || savedFiles.size() != 1)
-    return 60;
-  const QString savedPath =
-      QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
-          .filePath(savedFiles.constFirst());
-  if (QImage(savedPath) != snapshotBeforeSave || QFile::exists(snapshotPath))
-    return 61;
+  QString savedPath;
+  {
+    CaptureEditor finishEditor(capture);
+    finishEditor.resize(800, 600);
+    finishEditor.show();
+    application.processEvents();
+    QTest::mousePress(&finishEditor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(100, 100));
+    QTest::mouseMove(&finishEditor, QPoint(650, 470), 20);
+    QTest::mouseRelease(&finishEditor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(650, 470));
+    QTest::keyClick(&finishEditor, Qt::Key_C);
+    QTest::mouseClick(&finishEditor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(470, 300));
+    application.processEvents();
+    const QImage snapshotBeforeSave(snapshotPath);
+    if (snapshotBeforeSave.isNull())
+      return 59;
+    QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
+    application.processEvents();
+    const QStringList savedFiles =
+        QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
+            .entryList({QStringLiteral("*.png")}, QDir::Files);
+    if (finishEditor.isVisible() || savedFiles.size() != 1)
+      return 60;
+    savedPath = QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
+                    .filePath(savedFiles.constFirst());
+    if (QImage(savedPath) != snapshotBeforeSave || QFile::exists(snapshotPath))
+      return 61;
+  }
+  if (!QFile::exists(savedPath))
+    return 70;
   if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_COPY")) {
     QString clipboardError;
     if (!copyPngFileToClipboard(savedPath, clipboardError)) {

@@ -74,6 +74,10 @@ struct Annotation {
 void paintAnnotation(QPainter &painter, const Annotation &annotation);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle);
+/** Creates or repairs a private directory owned by the current user. */
+[[nodiscard]] bool ensurePrivateDirectory(const QString &path);
+/** Returns Omasnap's private runtime directory, or empty on failure. */
+[[nodiscard]] QString secureRuntimeDirectory();
 [[nodiscard]] QString moveSnapshotToScreenshots(const QString &sourcePath,
                                                 QString &error);
 [[nodiscard]] QString temporarySnapshotPath();

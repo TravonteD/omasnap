@@ -44,8 +44,8 @@ Runtime commands used by the application:
 - `grim`
 - `wl-copy` and `wl-paste`
 - `tesseract`
-- `omarchy-notification-send` when available; completed captures include a thumbnail and
-  open through `xdg-open` when clicked. Notification failure does not invalidate output.
+- `omarchy-notification-send` when available; saved captures include a thumbnail and
+  reopen in Omasnap when clicked. Notification failure does not invalidate output.
 
 ## Install on Omarchy
 
@@ -169,9 +169,9 @@ omasnap ~/Pictures/Screenshots/screenshot-2026-08-11_10-00-00.png
 omasnap --file /path/to/capture.png
 ```
 
-File URLs are accepted too. The capture notification's "Click to edit" action launches
-`omasnap` on the finished screenshot, so a capture can be reopened and re-annotated
-instead of being handed to an external viewer.
+File URLs are accepted too. A saved capture notification's "Click to edit" action launches
+`omasnap` on the finished screenshot, so it can be reopened and re-annotated. Clipboard-only
+captures are not retained on disk and therefore have no delayed edit action.
 
 Environment overrides:
 

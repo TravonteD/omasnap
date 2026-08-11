@@ -12,7 +12,6 @@
 #include <QLockFile>
 #include <QScreen>
 #include <QSocketNotifier>
-#include <QStandardPaths>
 #include <QUrl>
 #include <QWindow>
 
@@ -24,29 +23,48 @@ namespace {
 class PosixSignalNotifier final : public QObject {
 public:
   explicit PosixSignalNotifier(QObject *parent = nullptr) : QObject(parent) {
-    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds_) != 0)
+    if (::socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0,
+                     fds_) != 0)
       return; // Default signal disposition stays in effect.
+    signalFd_ = fds_[0];
 
     struct sigaction sa{};
     sa.sa_handler = [](int) {
-      char a = 1;
-      ::write(fds_[0], &a, sizeof(a));
+      const char byte = 1;
+      const int fd = signalFd_;
+      if (fd >= 0)
+        static_cast<void>(::write(fd, &byte, sizeof(byte)));
     };
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
-    ::sigaction(SIGINT, &sa, nullptr);
-    ::sigaction(SIGTERM, &sa, nullptr);
+    sigintInstalled_ = ::sigaction(SIGINT, &sa, &previousSigint_) == 0;
+    sigtermInstalled_ = ::sigaction(SIGTERM, &sa, &previousSigterm_) == 0;
+    if (!sigintInstalled_ && !sigtermInstalled_) {
+      closeSockets();
+      return;
+    }
 
     notifier_ = new QSocketNotifier(fds_[1], QSocketNotifier::Read, this);
     connect(notifier_, &QSocketNotifier::activated, this, [this] {
       notifier_->setEnabled(false);
-      char a;
-      ::read(fds_[1], &a, sizeof(a));
+      char bytes[32];
+      while (::read(fds_[1], bytes, sizeof(bytes)) > 0) {
+      }
       QCoreApplication::quit();
     });
   }
 
   ~PosixSignalNotifier() override {
+    if (sigintInstalled_)
+      ::sigaction(SIGINT, &previousSigint_, nullptr);
+    if (sigtermInstalled_)
+      ::sigaction(SIGTERM, &previousSigterm_, nullptr);
+    closeSockets();
+  }
+
+private:
+  void closeSockets() {
+    signalFd_ = -1;
     for (int &fd : fds_) {
       if (fd >= 0) {
         ::close(fd);
@@ -55,16 +73,19 @@ public:
     }
   }
 
-private:
   static inline int fds_[2]{-1, -1};
+  static inline volatile sig_atomic_t signalFd_ = -1;
+  struct sigaction previousSigint_{};
+  struct sigaction previousSigterm_{};
+  bool sigintInstalled_ = false;
+  bool sigtermInstalled_ = false;
   QSocketNotifier *notifier_ = nullptr;
 };
 } // namespace
 
 int main(int argc, char **argv) {
   QCoreApplication::setApplicationName(QStringLiteral("omasnap"));
-  QCoreApplication::setApplicationVersion(
-      QString::fromLatin1(OMASNAP_VERSION));
+  QCoreApplication::setApplicationVersion(QString::fromLatin1(OMASNAP_VERSION));
   QCoreApplication::setOrganizationName(QStringLiteral("Omarchy"));
   qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
   QGuiApplication::setDesktopFileName(QStringLiteral("omasnap"));
@@ -151,12 +172,13 @@ int main(int argc, char **argv) {
     return 1;
   application.setQuitOnLastWindowClosed(true);
 
-  QString runtime =
-      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-  if (runtime.isEmpty())
-    runtime = QDir::tempPath();
-  QLockFile instanceLock(QDir(runtime).filePath(
-      QStringLiteral("omasnap.instance")));
+  const QString runtime = secureRuntimeDirectory();
+  if (runtime.isEmpty()) {
+    qCritical() << "Could not create private runtime directory";
+    return 1;
+  }
+  QLockFile instanceLock(
+      QDir(runtime).filePath(QStringLiteral("omasnap.instance")));
   instanceLock.setStaleLockTime(0);
   if (!instanceLock.tryLock(0))
     return 0;
@@ -179,11 +201,10 @@ int main(int argc, char **argv) {
     capture.monitor.pixelSize = image.size();
     capture.monitor.geometry = QRect(QPoint(0, 0), image.size());
     captureMode = CaptureEditor::CaptureMode::File;
-    qInfo().noquote()
-        << QStringLiteral("Opened %1 for annotation (%2x%3)")
-               .arg(localFile)
-               .arg(image.width())
-               .arg(image.height());
+    qInfo().noquote() << QStringLiteral("Opened %1 for annotation (%2x%3)")
+                             .arg(localFile)
+                             .arg(image.width())
+                             .arg(image.height());
   } else if (!captureFocusedMonitor(capture, error)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
@@ -191,12 +212,12 @@ int main(int argc, char **argv) {
   }
 
   if (filePath.isEmpty())
-    qInfo().noquote()
-        << QStringLiteral("Captured %1 workspace %2 with %3 selectable "
-                          "windows")
-               .arg(capture.monitor.name)
-               .arg(capture.monitor.workspaceId)
-               .arg(capture.windows.size());
+    qInfo().noquote() << QStringLiteral(
+                             "Captured %1 workspace %2 with %3 selectable "
+                             "windows")
+                             .arg(capture.monitor.name)
+                             .arg(capture.monitor.workspaceId)
+                             .arg(capture.windows.size());
 
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {

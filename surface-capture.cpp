@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <limits>
 #include <memory>
 #include <poll.h>
 #include <string>
@@ -247,10 +248,15 @@ bool createShmBuffer(CaptureState &state, QString &error) {
 
   const std::size_t stride = static_cast<std::size_t>(state.width) * 4;
   state.memorySize = stride * state.height;
+  if (state.memorySize >
+      static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
+    error = QStringLiteral("Surface capture buffer is too large");
+    return false;
+  }
   char name[96];
   std::snprintf(name, sizeof(name), "/omarchy-capture-%d-%p", getpid(),
                 static_cast<void *>(&state));
-  state.fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+  state.fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
   if (state.fd < 0) {
     error = QStringLiteral("Could not allocate surface capture memory");
     return false;
