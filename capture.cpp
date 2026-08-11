@@ -579,6 +579,23 @@ QString temporarySnapshotPath() {
                          .arg(nonce, 8, 16, QChar('0')));
 }
 
+QString pinnedSnapshotPath(int index) {
+  return runtimePath(QStringLiteral("pin-%1-%2.png")
+                         .arg(QCoreApplication::applicationPid())
+                         .arg(index));
+}
+
+void prunePinnedSnapshots() {
+  const QDateTime cutoff = QDateTime::currentDateTime().addDays(-1);
+  const QFileInfoList stale =
+      QDir(runtimePath(QString())).entryInfoList({QStringLiteral("pin-*.png")},
+                                                 QDir::Files);
+  for (const QFileInfo &entry : stale) {
+    if (entry.lastModified() < cutoff)
+      QFile::remove(entry.absoluteFilePath());
+  }
+}
+
 bool saveTemporarySnapshot(const QImage &image, QString path, QString &error) {
   if (image.isNull()) {
     error = QStringLiteral("Temporary snapshot is empty");

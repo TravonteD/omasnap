@@ -111,6 +111,7 @@ private:
   [[nodiscard]] EditState editState() const;
   void enterEdit(QString status);
   void persistSnapshot();
+  void pinSnapshot();
   void pushUndoState(const EditState &state);
   void recordEdit();
   void redoEdit();
@@ -160,6 +161,7 @@ private:
   bool dragStartStateValid_ = false;
   bool dragChanged_ = false;
   QString snapshotPath_;
+  int pinCount_ = 0;
   QString status_ =
       QStringLiteral("Drag to select an area · Space selects a window");
   QLineEdit *textEditor_ = nullptr;
