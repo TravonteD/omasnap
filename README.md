@@ -18,8 +18,8 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - Per-layer preset or custom colors (including highlighter ink), undo/redo history,
   OCR-region capture,
   mesh-gradient backdrops, and rendered drop shadows.
-- Pin a finished capture as a bottom-right always-on-top layer surface (`omasnap-pin`),
-  visible on every workspace and independent of the capture process.
+- Pin a finished capture as a bottom-right always-on-top layer surface, launched
+  from the same `omasnap` executable and visible on every workspace.
 - Crash-resistant working snapshots under `/run/user/<UID>/omasnap/` (falling back to
   a private `/tmp/omasnap-<UID>/`), written immediately after selection and overwritten
   after every completed edit. Saving moves that file into `~/Pictures/Screenshots`;
@@ -228,10 +228,11 @@ Install the corresponding Tesseract language data before adding a language to
 ### Pinned captures
 
 `P` renders the current capture, writes it to a `pin-<pid>-<n>.png` under the runtime
-snapshot directory, and hands it to `omasnap-pin`. The separate layer-shell surface is
-anchored 14 logical pixels from the bottom-right corner and stays visible on every
-workspace without compositor window rules. It preserves the image aspect ratio, with a
-maximum width of one third of the screen and a maximum height of one half.
+snapshot directory, and launches the same `omasnap` executable in detached pin mode.
+The layer-shell surface is anchored 14 logical pixels from the bottom-right corner and
+stays visible on every workspace without compositor window rules. It preserves the image
+aspect ratio, with a maximum width of one third of the screen and a maximum height of one
+half.
 
 Pinning neither touches the clipboard nor writes to the screenshot directory; it is a
 fourth output alongside copy, save, and copy-and-save. `P` closes the editor and releases

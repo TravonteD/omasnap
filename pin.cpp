@@ -1,13 +1,12 @@
+#include "pin.hpp"
 #include "icons.hpp"
 
 #include <LayerShellQt/Window>
 #include <QApplication>
 #include <QBuffer>
-#include <QDir>
 #include <QDrag>
 #include <QEnterEvent>
 #include <QFile>
-#include <QFileInfo>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QImage>
@@ -30,14 +29,6 @@
 #include <utility>
 
 namespace {
-
-// Prefer the sibling binary so an uninstalled build tree edits with the same
-// build's editor instead of an older installed one.
-QString omasnapBinary() {
-  const QString sibling = QDir(QCoreApplication::applicationDirPath())
-                              .filePath(QStringLiteral("omasnap"));
-  return QFileInfo::exists(sibling) ? sibling : QStringLiteral("omasnap");
-}
 
 constexpr int kMinimumEdge = 80;
 constexpr qreal kCloseButtonSize = 22;
@@ -206,7 +197,8 @@ protected:
 
   // Send the pinned image back to the omasnap editor, replacing the pin.
   void reopenInEditor() {
-    if (!QProcess::startDetached(omasnapBinary(), {path_}))
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                 {path_}))
       showToast(QStringLiteral("Could not start omasnap"));
     else
       close();
@@ -392,34 +384,20 @@ private:
 
 } // namespace
 
-int main(int argc, char **argv) {
-  // Unlike the capture overlay's full-screen layer, the pin is a small
-  // layer-shell surface anchored to the bottom-right. Layer surfaces are
-  // natively visible on every desktop, so the pin needs no compositor
-  // window rules, and its size stays within the caps set by the window.
-  qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
-  QCoreApplication::setApplicationName(QStringLiteral("omasnap-pin"));
-  QGuiApplication::setDesktopFileName(QStringLiteral("omasnap-pin"));
-  QApplication application(argc, argv);
-
-  const QStringList arguments = QCoreApplication::arguments();
-  if (arguments.size() < 2) {
-    qWarning("usage: omasnap-pin <image>");
-    return 2;
-  }
-  QImage image(arguments.at(1));
+int runPinnedCapture(const QString &path) {
+  QImage image(path);
   if (image.isNull()) {
-    qWarning("omasnap-pin: could not load %s", qUtf8Printable(arguments.at(1)));
+    qWarning("omasnap: could not load pinned image %s", qUtf8Printable(path));
     return 1;
   }
 
-  PinWindow window(std::move(image), arguments.at(1));
+  PinWindow window(std::move(image), path);
   static_cast<void>(window.winId());
   QWindow *handle = window.windowHandle();
   LayerShellQt::Window *layer =
       handle ? LayerShellQt::Window::get(handle) : nullptr;
   if (!handle || !layer) {
-    qCritical("omasnap-pin: could not create layer surface");
+    qCritical("omasnap: could not create pinned layer surface");
     return 1;
   }
 
@@ -436,5 +414,5 @@ int main(int argc, char **argv) {
   layer->setActivateOnShow(false);
   layer->setLayer(LayerShellQt::Window::LayerOverlay);
   window.show();
-  return application.exec();
+  return QApplication::exec();
 }

@@ -22,6 +22,7 @@ cmake --build "$build_dir" --parallel
 cmake --install "$build_dir"
 
 rm -f \
+  "$prefix/bin/omasnap-pin" \
   "$prefix/bin/omarchy-capture-editor" \
   "$prefix/share/applications/omarchy-capture-editor.desktop"
 rm -rf "$prefix/share/licenses/omarchy-capture-editor"

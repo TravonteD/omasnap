@@ -32,6 +32,8 @@ qt_add_executable(omasnap
   main.cpp
   icons.cpp
   icons.hpp
+  pin.cpp
+  pin.hpp
   capture.cpp
   capture.hpp
   surface-capture.cpp
@@ -60,19 +62,6 @@ target_link_libraries(omasnap PRIVATE
   PkgConfig::WaylandClient
 )
 
-qt_add_executable(omasnap-pin
-  pin.cpp
-  icons.cpp
-  icons.hpp
-)
-target_compile_features(omasnap-pin PRIVATE cxx_std_23)
-target_compile_options(omasnap-pin PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(omasnap-pin PRIVATE
-  Qt6::Core
-  Qt6::Gui
-  Qt6::Widgets
-  LayerShellQt::Interface
-)
 
 qt_add_executable(omasnap-smoke
   editor-smoke.cpp
@@ -104,7 +93,7 @@ target_link_libraries(omasnap-smoke PRIVATE
   PkgConfig::WaylandClient
 )
 
-install(TARGETS omasnap omasnap-pin
+install(TARGETS omasnap
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(FILES assets/OFL.txt

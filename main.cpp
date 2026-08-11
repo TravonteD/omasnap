@@ -1,5 +1,6 @@
 #include "capture.hpp"
 #include "editor.hpp"
+#include "pin.hpp"
 
 #include <LayerShellQt/Window>
 
@@ -116,6 +117,11 @@ int main(int argc, char **argv) {
                      "instead of capturing the screen."),
       QStringLiteral("path"));
   parser.addOption(fileOption);
+  const QCommandLineOption pinOption(
+      QStringLiteral("pin"),
+      QStringLiteral("Show an image as a pinned always-visible layer."),
+      QStringLiteral("path"));
+  parser.addOption(pinOption);
   parser.addPositionalArgument(
       QStringLiteral("target"),
       QStringLiteral("Capture mode (smart, region, windows, fullscreen) or the "
@@ -134,6 +140,17 @@ int main(int argc, char **argv) {
     captureMode = CaptureEditor::CaptureMode::Window;
 
   const QStringList positional = parser.positionalArguments();
+  if (parser.isSet(pinOption)) {
+    if (!filePath.isEmpty() || requestedModes > 0 || !positional.isEmpty()) {
+      qCritical()
+          << "Pinned mode cannot be combined with capture or edit targets";
+      return 2;
+    }
+    QString pinPath = QUrl(parser.value(pinOption)).toLocalFile();
+    if (pinPath.isEmpty())
+      pinPath = parser.value(pinOption);
+    return runPinnedCapture(pinPath);
+  }
   if (positional.size() > 1) {
     qCritical() << "Only one capture target may be specified";
     return 2;

@@ -37,16 +37,6 @@ constexpr std::array<qreal, 3> kTextSizes{2.0, 5.0, 9.0};
 constexpr std::array<const char *, 3> kTextSizeNames{"S", "M", "L"};
 constexpr qreal kToolbarWidth = 680;
 
-// Prefer the sibling binary so an uninstalled build tree pins with its own pin
-// viewer instead of an older installed one.
-QString pinProgram() {
-  const QString sibling = QDir(QCoreApplication::applicationDirPath())
-                              .filePath(QStringLiteral("omasnap-pin"));
-  if (QFileInfo::exists(sibling))
-    return sibling;
-  return QStringLiteral("omasnap-pin");
-}
-
 bool hasEndpointHandles(Annotation::Kind kind) {
   return kind == Annotation::Kind::Arrow || kind == Annotation::Kind::Line ||
          kind == Annotation::Kind::Rectangle;
@@ -754,10 +744,11 @@ void CaptureEditor::pinSnapshot() {
     return;
   }
 
-  if (!QProcess::startDetached(pinProgram(), {path})) {
+  if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                               {QStringLiteral("--pin"), path})) {
     QFile::remove(path);
     --pinCount_;
-    setStatus(QStringLiteral("Could not start omasnap-pin"));
+    setStatus(QStringLiteral("Could not start pinned capture"));
     return;
   }
 
@@ -1902,7 +1893,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
        {QStringLiteral("1–6"), QStringLiteral("Color")},
        {QStringLiteral("Wheel"), QStringLiteral("Zoom selected / tool size")},
        {QStringLiteral("O"), QStringLiteral("Select OCR text")},
-       {QStringLiteral("B"), QStringLiteral("Cycle backdrop")},
+       {QStringLiteral("B / P"), QStringLiteral("Backdrop / Pin on screen")},
        {QStringLiteral("Ctrl+Z"), QStringLiteral("Undo")},
        {QStringLiteral("Ctrl+Shift+Z"), QStringLiteral("Redo")},
        {QStringLiteral("Enter"), QStringLiteral("Copy + save")},
