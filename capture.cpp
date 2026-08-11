@@ -104,7 +104,7 @@ bool makeSecureDir(const QString &dirPath) {
     if (!makeSecureDir(parent))
       return false;
   }
-  return ::mkdir(dirPath.toLocal8().constData(), 0700) == 0 || dir.exists();
+  return ::mkdir(dirPath.toLocal8Bit().constData(), 0700) == 0 || dir.exists();
 }
 
 QString runtimePath(const QString &name) {
@@ -584,7 +584,7 @@ bool saveTemporarySnapshot(const QImage &image, QString path, QString &error) {
   // Reuse the current file (snapshotPath_ is stable) but never follow a
   // pre-created symlink; the 0700 runtime directory already blocks outsiders
   // from planting one.
-  const int fd = ::open(path.toLocal8().constData(),
+  const int fd = ::open(path.toLocal8Bit().constData(),
                         O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
   if (fd < 0) {
     error = QStringLiteral("Could not open secure snapshot file: %1").arg(path);
