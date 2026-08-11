@@ -10,8 +10,8 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 ## Features
 
 - Freeform region, window, and full-monitor capture modes.
-- Clean window-surface capture through Wayland image-copy protocols, with a screen-crop
-  fallback when the compositor does not expose the requested surface.
+- Clean window-surface capture through Wayland image-copy protocols. A failed native
+  capture stays in the window picker; Omasnap never substitutes a crop of the desktop.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
 - Arrows, straight lines, smoothed freehand strokes, rectangles, numbered markers, and
   editable Neucha text.
@@ -20,26 +20,28 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - Crash-resistant working snapshots under `/tmp/omasnap/snapshot-<pid>.png`, written
   immediately after selection and overwritten after every completed edit. Saving moves
   that file into `~/Pictures/Screenshots`; clipboard output streams the same PNG.
-- PNG clipboard output through `wl-copy` and timestamped files under
-  `~/Pictures/Screenshots` by default.
+- Verified PNG clipboard output through `wl-copy`/`wl-paste`, plus timestamped files
+  under `~/Pictures/Screenshots` by default.
 - Correct native-pixel export on fractional or integer-scaled monitors.
 
 ## Platform scope
 
 The supported target is **Wayland + Hyprland**, with Omarchy as the primary integration.
-The renderer, layer surface, clipboard, and clean-window capture use Wayland protocols,
-but monitor/window discovery currently calls `hyprctl` and the frozen-frame handoff uses
-`hyprpicker`. Another Wayland compositor could support the application after supplying
-an equivalent discovery/freeze backend; generic Wayland support is not claimed by 1.0.
+The renderer, layer surface, clipboard, and clean-window capture use Wayland protocols;
+monitor/window discovery currently calls `hyprctl`. `grim` captures the monitor before
+the layer maps. Selection displays that captured frame, while the annotation editor uses
+a translucent layer scrim over the live desktop and draws only the selected capture.
+Another Wayland compositor could support the application after supplying equivalent
+monitor and window discovery; generic Wayland support is not claimed by 1.0.
 
 Runtime commands used by the application:
 
-- `hyprctl` and `hyprpicker`
+- `hyprctl`
 - `grim`
-- `wl-copy`
+- `wl-copy` and `wl-paste`
 - `tesseract`
-- `omarchy-notification-send` when available; notification failure does not invalidate a
-  completed capture
+- `omarchy-notification-send` when available; completed captures include a thumbnail and
+  open through `xdg-open` when clicked. Notification failure does not invalidate output.
 
 ## Install on Omarchy
 
@@ -97,7 +99,7 @@ Install the complete build/runtime dependency set:
 ```bash
 sudo pacman -S --needed \
   base-devel cmake ninja pkgconf qt6-base layer-shell-qt \
-  wayland wayland-protocols hyprland grim hyprpicker wl-clipboard \
+  wayland wayland-protocols hyprland grim wl-clipboard \
   tesseract tesseract-data-eng
 ```
 

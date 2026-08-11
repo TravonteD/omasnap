@@ -264,6 +264,7 @@ bool createShmBuffer(CaptureState &state, QString &error) {
     error = QStringLiteral("Could not map surface capture memory");
     return false;
   }
+  std::memset(state.memory, 0, state.memorySize);
 
   state.pool = wl_shm_create_pool(state.shm, state.fd,
                                   static_cast<int32_t>(state.memorySize));

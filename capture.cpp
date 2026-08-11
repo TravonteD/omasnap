@@ -1,26 +1,22 @@
 #include "capture.hpp"
 
-#include <QApplication>
-#include <QClipboard>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
-#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLinearGradient>
-#include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryFile>
-#include <QThread>
 
+#include <QUrl>
 #include <algorithm>
 #include <cmath>
 
@@ -63,6 +59,34 @@ ProcessResult runProcess(const QString &program, const QStringList &arguments,
     process.kill();
   return {process.readAllStandardOutput(), process.readAllStandardError(),
           finished ? process.exitCode() : -1, finished};
+}
+
+bool copyToWaylandClipboard(const QString &mimeType, const QByteArray &payload,
+                            QString &error) {
+  QByteArray lastError;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const ProcessResult copied =
+        runProcess(QStringLiteral("wl-copy"),
+                   {QStringLiteral("--type"), mimeType}, payload, 5000);
+    if (!copied.finished || copied.exitCode != 0) {
+      lastError = copied.error;
+      continue;
+    }
+
+    const ProcessResult verified = runProcess(
+        QStringLiteral("wl-paste"),
+        {QStringLiteral("--no-newline"), QStringLiteral("--type"), mimeType},
+        {}, 5000);
+    if (verified.finished && verified.exitCode == 0 &&
+        verified.output == payload)
+      return true;
+    lastError = verified.error;
+    if (lastError.isEmpty())
+      lastError = QByteArrayLiteral("clipboard verification did not match");
+  }
+  error = QStringLiteral("Could not persist clipboard: %1")
+              .arg(QString::fromUtf8(lastError).trimmed());
+  return false;
 }
 
 QString runtimePath(const QString &name) {
@@ -352,18 +376,7 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
   }
 }
 
-void stopCaptureFreeze(QProcess &freeze) {
-  if (freeze.state() == QProcess::NotRunning)
-    return;
-  freeze.terminate();
-  if (!freeze.waitForFinished(300)) {
-    freeze.kill();
-    freeze.waitForFinished(300);
-  }
-}
-
-bool captureFocusedMonitor(CaptureData &capture, QString &error,
-                           QProcess *heldFreeze) {
+bool captureFocusedMonitor(CaptureData &capture, QString &error) {
   const ProcessResult monitors =
       runProcess(QStringLiteral("hyprctl"),
                  {QStringLiteral("monitors"), QStringLiteral("-j")});
@@ -384,14 +397,6 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error,
   const QString sourcePath = sourceFile.fileName();
   sourceFile.close();
 
-  QProcess localFreeze;
-  QProcess &freeze = heldFreeze ? *heldFreeze : localFreeze;
-  freeze.setProcessChannelMode(QProcess::ForwardedErrorChannel);
-  freeze.start(QStringLiteral("hyprpicker"),
-               {QStringLiteral("-r"), QStringLiteral("-z")});
-  freeze.waitForStarted(500);
-  QThread::msleep(100);
-
   const QRect geometry = capture.monitor.geometry;
   const QString grimGeometry = QStringLiteral("%1,%2 %3x%4")
                                    .arg(geometry.x())
@@ -404,12 +409,9 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error,
        QString::number(capture.monitor.scale, 'g', 8), QStringLiteral("-g"),
        grimGeometry, sourcePath},
       {}, 10000);
-  if (!heldFreeze)
-    stopCaptureFreeze(freeze);
 
   if (!grim.finished || grim.exitCode != 0 ||
       !capture.source.load(sourcePath)) {
-    stopCaptureFreeze(freeze);
     error = QStringLiteral("Screen capture failed: %1")
                 .arg(QString::fromUtf8(grim.error).trimmed());
     return false;
@@ -418,7 +420,6 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error,
   capture.preview = capture.source.scaled(
       geometry.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
   if (capture.preview.isNull()) {
-    stopCaptureFreeze(freeze);
     error = QStringLiteral("Could not prepare screenshot preview");
     return false;
   }
@@ -517,19 +518,7 @@ bool copyPngFileToClipboard(const QString &path, QString &error) {
     error = QStringLiteral("Screenshot snapshot is empty: %1").arg(path);
     return false;
   }
-  QImage image;
-  if (image.loadFromData(png, "PNG"))
-    QApplication::clipboard()->setImage(image);
-
-  const ProcessResult copied = runProcess(
-      QStringLiteral("wl-copy"),
-      {QStringLiteral("--type"), QStringLiteral("image/png")}, png, 5000);
-  if (!copied.finished || copied.exitCode != 0) {
-    error = QStringLiteral("Could not persist image clipboard: %1")
-                .arg(QString::fromUtf8(copied.error).trimmed());
-    return false;
-  }
-  return true;
+  return copyToWaylandClipboard(QStringLiteral("image/png"), png, error);
 }
 
 QString moveSnapshotToScreenshots(const QString &sourcePath, QString &error) {
@@ -578,17 +567,8 @@ bool copyTextToClipboard(const QString &text, QString &error) {
     error = QStringLiteral("No text found in selection");
     return false;
   }
-  QApplication::clipboard()->setText(text);
-  const ProcessResult copied = runProcess(
-      QStringLiteral("wl-copy"),
-      {QStringLiteral("--type"), QStringLiteral("text/plain;charset=utf-8")},
-      text.toUtf8(), 5000);
-  if (!copied.finished || copied.exitCode != 0) {
-    error = QStringLiteral("Could not persist text clipboard: %1")
-                .arg(QString::fromUtf8(copied.error).trimmed());
-    return false;
-  }
-  return true;
+  return copyToWaylandClipboard(QStringLiteral("text/plain;charset=utf-8"),
+                                text.toUtf8(), error);
 }
 
 QString recognizeText(const QImage &image, QString &error) {
@@ -627,10 +607,17 @@ QString recognizeText(const QImage &image, QString &error) {
 }
 
 void sendCaptureNotification(const QString &message, const QString &imagePath) {
-  QStringList arguments{QStringLiteral("-g"), QStringLiteral(""), message,
-                        QStringLiteral("-t"), QStringLiteral("2200")};
-  if (!imagePath.isEmpty())
-    arguments << QStringLiteral("--image") << imagePath;
+  QStringList arguments{QStringLiteral("-g"), QStringLiteral(""),
+                        QStringLiteral("--app-name"), QStringLiteral("omasnap"),
+                        message};
+  if (!imagePath.isEmpty()) {
+    const QString imageUrl =
+        QUrl::fromLocalFile(imagePath).toString(QUrl::FullyEncoded);
+    arguments << QStringLiteral("Click to open") << QStringLiteral("--image")
+              << imagePath << QStringLiteral("--exec")
+              << QStringLiteral("xdg-open %1").arg(imageUrl);
+  }
+  arguments << QStringLiteral("-t") << QStringLiteral("4500");
   QProcess::startDetached(QStringLiteral("omarchy-notification-send"),
                           arguments);
 }

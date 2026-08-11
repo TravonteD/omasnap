@@ -98,8 +98,8 @@ int main(int argc, char **argv) {
     return 29;
   const QImage editBackdropUi = editor.grab().toImage();
   const QColor backdropCorner = editBackdropUi.pixelColor(5, 5);
-  if (backdropCorner.alpha() != 255 || backdropCorner == QColor(Qt::black) ||
-      backdropCorner == capture.preview.pixelColor(5, 5))
+  if (backdropCorner.alpha() != 160 || backdropCorner.red() != 0 ||
+      backdropCorner.green() != 0 || backdropCorner.blue() != 0)
     return 9;
   QTest::keyClick(&editor, Qt::Key_A);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 250));
@@ -146,8 +146,7 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (QImage(snapshotPath) != arrowSnapshot)
     return 41;
-  QTest::keyClick(&editor, Qt::Key_Z,
-                  Qt::ControlModifier | Qt::ShiftModifier);
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
   application.processEvents();
   if (QImage(snapshotPath) != lineSnapshot)
     return 42;
@@ -158,8 +157,7 @@ int main(int argc, char **argv) {
   const QImage lineSelectedUi = editor.grab().toImage();
   if (lineSelectedUi.pixelColor(260, 210) !=
           QColor(QStringLiteral("#0a84ff")) ||
-      lineSelectedUi.pixelColor(520, 265) !=
-          QColor(QStringLiteral("#0a84ff")))
+      lineSelectedUi.pixelColor(520, 265) != QColor(QStringLiteral("#0a84ff")))
     return 43;
   for (int x = 280; x <= 500; ++x) {
     if (lineSelectedUi.pixelColor(x, 206) !=
@@ -185,8 +183,7 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (QImage(snapshotPath) != lineSnapshot)
     return 46;
-  QTest::keyClick(&editor, Qt::Key_Z,
-                  Qt::ControlModifier | Qt::ShiftModifier);
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
   application.processEvents();
   if (QImage(snapshotPath) != scaledLineSnapshot)
     return 47;
@@ -313,6 +310,22 @@ int main(int argc, char **argv) {
           outputRoot + QStringLiteral("-window-mode.png"), "PNG"))
     return 36;
 
+  CaptureData failedWindowCapture = capture;
+  failedWindowCapture.windows = {{{80, 80, 300, 220},
+                                  QStringLiteral("missing-stable-id"),
+                                  QStringLiteral("missing")}};
+  CaptureEditor failedWindowEditor(failedWindowCapture,
+                                   CaptureEditor::CaptureMode::Window);
+  failedWindowEditor.resize(800, 600);
+  failedWindowEditor.show();
+  QTest::mouseMove(&failedWindowEditor, QPoint(200, 160), 20);
+  QTest::keyClick(&failedWindowEditor, Qt::Key_Return);
+  application.processEvents();
+  if (failedWindowEditor.cursor().shape() != Qt::PointingHandCursor ||
+      !failedWindowEditor.grab().save(
+          outputRoot + QStringLiteral("-window-capture-failed.png"), "PNG"))
+    return 63;
+
   CaptureData nativePreviewCapture = capture;
   nativePreviewCapture.monitor.scale = 2.0;
   nativePreviewCapture.monitor.pixelSize = {1600, 1200};
@@ -334,6 +347,28 @@ int main(int argc, char **argv) {
   if (!fullscreenEditor.grab().save(
           outputRoot + QStringLiteral("-fullscreen-editor.png"), "PNG"))
     return 16;
+
+  CaptureData windowSurfaceCapture = capture;
+  windowSurfaceCapture.monitor.scale = 1.0;
+  windowSurfaceCapture.monitor.pixelSize = {320, 180};
+  windowSurfaceCapture.source =
+      QImage(320, 180, QImage::Format_ARGB32_Premultiplied);
+  windowSurfaceCapture.source.fill(QColor(QStringLiteral("#d12f45")));
+  windowSurfaceCapture.preview = windowSurfaceCapture.source;
+  CaptureEditor windowSurfaceEditor(windowSurfaceCapture,
+                                    CaptureEditor::CaptureMode::Fullscreen);
+  windowSurfaceEditor.resize(800, 600);
+  windowSurfaceEditor.show();
+  application.processEvents();
+  const QImage windowSurfaceUi = windowSurfaceEditor.grab().toImage();
+  const QColor windowSurfaceCorner = windowSurfaceUi.pixelColor(5, 5);
+  if (windowSurfaceCorner.alpha() != 160 || windowSurfaceCorner.red() != 0 ||
+      windowSurfaceCorner.green() != 0 || windowSurfaceCorner.blue() != 0 ||
+      windowSurfaceUi.pixelColor(400, 300) !=
+          QColor(QStringLiteral("#d12f45")) ||
+      !windowSurfaceUi.save(
+          outputRoot + QStringLiteral("-window-surface-editor.png"), "PNG"))
+    return 62;
 
   CaptureEditor cropEditor(capture);
   cropEditor.resize(800, 600);
@@ -490,9 +525,17 @@ int main(int argc, char **argv) {
           .entryList({QStringLiteral("*.png")}, QDir::Files);
   if (finishEditor.isVisible() || savedFiles.size() != 1)
     return 60;
-  const QString savedPath = QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
-                                .filePath(savedFiles.constFirst());
+  const QString savedPath =
+      QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
+          .filePath(savedFiles.constFirst());
   if (QImage(savedPath) != snapshotBeforeSave || QFile::exists(snapshotPath))
     return 61;
+  if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_COPY")) {
+    QString clipboardError;
+    if (!copyPngFileToClipboard(savedPath, clipboardError)) {
+      qWarning().noquote() << clipboardError;
+      return 64;
+    }
+  }
   return 0;
 }

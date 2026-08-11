@@ -8,10 +8,8 @@
 #include <QDir>
 #include <QGuiApplication>
 #include <QLockFile>
-#include <QProcess>
 #include <QScreen>
 #include <QStandardPaths>
-#include <QTimer>
 #include <QWindow>
 
 int main(int argc, char **argv) {
@@ -99,8 +97,7 @@ int main(int argc, char **argv) {
 
   CaptureData capture;
   QString error;
-  QProcess freeze;
-  if (!captureFocusedMonitor(capture, error, &freeze)) {
+  if (!captureFocusedMonitor(capture, error)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
@@ -127,7 +124,6 @@ int main(int argc, char **argv) {
   QWindow *window = editor.windowHandle();
   LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
   if (!window || !layerWindow) {
-    stopCaptureFreeze(freeze);
     qCritical() << "Could not create capture overlay layer";
     return 1;
   }
@@ -147,12 +143,5 @@ int main(int argc, char **argv) {
   editor.show();
   editor.setFocus(Qt::ActiveWindowFocusReason);
 
-  // Keep hyprpicker's frozen overlay alive until this layer has been committed
-  // for several refreshes. The two identical frames overlap; the workspace is
-  // never exposed between capture and editor mapping.
-  QTimer::singleShot(50, &application,
-                     [&freeze] { stopCaptureFreeze(freeze); });
-  const int result = application.exec();
-  stopCaptureFreeze(freeze);
-  return result;
+  return application.exec();
 }

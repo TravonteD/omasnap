@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(omasnap VERSION 1.0.5 LANGUAGES C CXX)
+project(omasnap VERSION 1.0.6 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 find_package(PkgConfig REQUIRED)

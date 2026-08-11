@@ -310,7 +310,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   setWindowTitle(QStringLiteral("Omasnap"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
                  Qt::WindowStaysOnTopHint);
-  setAttribute(Qt::WA_OpaquePaintEvent);
+  setAttribute(Qt::WA_TranslucentBackground);
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
 
@@ -773,9 +773,8 @@ void CaptureEditor::applyEditState(const EditState &state) {
   annotations_ = state.annotations;
   backgroundStyle_ = state.backgroundStyle;
   selection_ = state.selection;
-  selectedAnnotation_ =
-      std::clamp(state.selectedAnnotation, -1,
-                 static_cast<int>(annotations_.size()) - 1);
+  selectedAnnotation_ = std::clamp(state.selectedAnnotation, -1,
+                                   static_cast<int>(annotations_.size()) - 1);
   nextMarker_ = state.nextMarker;
   editingAnnotation_ = -1;
   interaction_ = Interaction::None;
@@ -897,23 +896,23 @@ void CaptureEditor::chooseWindow(int index) {
   QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
   QImage surface;
   QString surfaceError;
-  QString selectedStatus;
-  if (captureWindowSurface(target, surface, surfaceError)) {
-    capture_.source = surface;
-    capture_.preview = surface.scaled(target.rect.size(), Qt::IgnoreAspectRatio,
-                                      Qt::SmoothTransformation);
-    selection_ = QRectF(QPointF(), target.rect.size());
-    selectedStatus = QStringLiteral(
-        "Window selected · Select moves layers · wheel zooms · outer handles "
-        "crop");
-  } else {
-    selection_ = target.rect;
-    selectedStatus =
-        QStringLiteral("Window crop selected · %1 · outer handles recrop")
-            .arg(surfaceError);
+  if (!captureWindowSurface(target, surface, surfaceError)) {
+    qWarning().noquote()
+        << QStringLiteral("Window capture failed: %1").arg(surfaceError);
+    setStatus(QStringLiteral("Window capture failed · %1 · choose another")
+                  .arg(surfaceError));
+    update();
+    return;
   }
+
+  capture_.source = surface;
+  capture_.preview = surface.scaled(target.rect.size(), Qt::IgnoreAspectRatio,
+                                    Qt::SmoothTransformation);
+  selection_ = QRectF(QPointF(), target.rect.size());
   windowMode_ = false;
-  enterEdit(std::move(selectedStatus));
+  enterEdit(QStringLiteral(
+      "Window selected · Select moves layers · wheel zooms · outer handles "
+      "crop"));
 }
 
 void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
@@ -1056,13 +1055,16 @@ void CaptureEditor::finish(OutputMode mode) {
     snapshotPath_ = saved;
   }
 
+  const QString notificationImage = saved.isEmpty() ? snapshotPath_ : saved;
   if (mode == OutputMode::Copy)
-    sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"));
+    sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"),
+                            notificationImage);
   else if (mode == OutputMode::Save)
-    sendCaptureNotification(QStringLiteral("Screenshot saved"), saved);
+    sendCaptureNotification(QStringLiteral("Screenshot saved"),
+                            notificationImage);
   else
     sendCaptureNotification(QStringLiteral("Screenshot saved and copied"),
-                            saved);
+                            notificationImage);
   close();
 }
 
@@ -1170,10 +1172,9 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     return;
   }
 
-  const bool redoShortcut =
-      event->matches(QKeySequence::Redo) ||
-      (event->key() == Qt::Key_Y &&
-       event->modifiers().testFlag(Qt::ControlModifier));
+  const bool redoShortcut = event->matches(QKeySequence::Redo) ||
+                            (event->key() == Qt::Key_Y &&
+                             event->modifiers().testFlag(Qt::ControlModifier));
   if (redoShortcut) {
     redoEdit();
   } else if (event->matches(QKeySequence::Undo)) {
@@ -1742,8 +1743,9 @@ void CaptureEditor::paintSelect(QPainter &painter) {
 }
 
 void CaptureEditor::paintEdit(QPainter &painter) {
-  painter.drawImage(rect(), capture_.source);
+  painter.setCompositionMode(QPainter::CompositionMode_Source);
   painter.fillRect(rect(), QColor(0, 0, 0, 160));
+  painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
   const QRectF image = editImageRect();
   const bool hasBackground = backgroundStyle_ != BackgroundStyle::None;
   if (hasBackground) {

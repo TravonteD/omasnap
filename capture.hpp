@@ -48,8 +48,7 @@ struct Annotation {
 
 [[nodiscard]] bool loadCaptureFonts();
 [[nodiscard]] QFont annotationTextFont(qreal size);
-[[nodiscard]] bool captureFocusedMonitor(CaptureData &capture, QString &error,
-                                         QProcess *heldFreeze = nullptr);
+[[nodiscard]] bool captureFocusedMonitor(CaptureData &capture, QString &error);
 [[nodiscard]] bool captureWindowSurface(const WindowTarget &window,
                                         QImage &image, QString &error);
 [[nodiscard]] QImage renderCapture(const CaptureData &capture,
@@ -69,4 +68,3 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
 [[nodiscard]] QString recognizeText(const QImage &image, QString &error);
 void sendCaptureNotification(const QString &message,
                              const QString &imagePath = {});
-void stopCaptureFreeze(QProcess &freeze);
