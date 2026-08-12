@@ -114,6 +114,14 @@ int main(int argc, char **argv) {
   parser.addOption(fullscreenOption);
   parser.addOption(windowOption);
   parser.addOption(regionOption);
+  const QCommandLineOption copyOption(
+      QStringLiteral("copy"),
+      QStringLiteral("Copy the capture directly without opening the editor."));
+  const QCommandLineOption saveOption(
+      QStringLiteral("save"),
+      QStringLiteral("Save the capture directly without opening the editor."));
+  parser.addOption(copyOption);
+  parser.addOption(saveOption);
   const QCommandLineOption fileOption(
       QStringLiteral("file"),
       QStringLiteral("Open an existing image file in the annotation editor "
@@ -134,6 +142,14 @@ int main(int argc, char **argv) {
 
   QString filePath = parser.value(fileOption);
 
+  QuickOutputMode quickOutputMode = QuickOutputMode::None;
+  if (parser.isSet(copyOption) && parser.isSet(saveOption))
+    quickOutputMode = QuickOutputMode::Both;
+  else if (parser.isSet(copyOption))
+    quickOutputMode = QuickOutputMode::Copy;
+  else if (parser.isSet(saveOption))
+    quickOutputMode = QuickOutputMode::Save;
+
   CaptureEditor::CaptureMode captureMode = CaptureEditor::CaptureMode::Region;
   int requestedModes = parser.isSet(fullscreenOption) +
                        parser.isSet(windowOption) + parser.isSet(regionOption);
@@ -144,7 +160,8 @@ int main(int argc, char **argv) {
 
   const QStringList positional = parser.positionalArguments();
   if (parser.isSet(pinOption)) {
-    if (!filePath.isEmpty() || requestedModes > 0 || !positional.isEmpty()) {
+    if (!filePath.isEmpty() || requestedModes > 0 || !positional.isEmpty() ||
+        quickOutputMode != QuickOutputMode::None) {
       qCritical()
           << "Pinned mode cannot be combined with capture or edit targets";
       return 2;
@@ -186,6 +203,10 @@ int main(int argc, char **argv) {
   }
   if (!filePath.isEmpty() && requestedModes > 0) {
     qCritical() << "An image file cannot be combined with a capture mode";
+    return 2;
+  }
+  if (!filePath.isEmpty() && quickOutputMode != QuickOutputMode::None) {
+    qCritical() << "Quick output options cannot be combined with an image file";
     return 2;
   }
   if (!loadCaptureFonts())
@@ -239,6 +260,20 @@ int main(int argc, char **argv) {
                              .arg(capture.monitor.workspaceId)
                              .arg(capture.windows.size());
 
+  if (filePath.isEmpty() &&
+      captureMode == CaptureEditor::CaptureMode::Fullscreen &&
+      quickOutputMode != QuickOutputMode::None) {
+    QString outputError;
+    if (!quickOutput(renderCapture(capture,
+                                   QRectF(QPointF(), capture.preview.size()),
+                                   {}, BackgroundStyle::None),
+                     quickOutputMode, outputError)) {
+      qCritical().noquote() << outputError;
+      return 1;
+    }
+    return 0;
+  }
+
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {
     if (screen->name() == capture.monitor.name) {
@@ -247,7 +282,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  CaptureEditor editor(std::move(capture), captureMode);
+  CaptureEditor editor(std::move(capture), captureMode, quickOutputMode);
   editor.setScreen(targetScreen);
   editor.setGeometry(targetScreen->geometry());
   editor.winId();

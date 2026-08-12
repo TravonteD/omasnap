@@ -35,6 +35,8 @@ struct CaptureData {
 };
 
 enum class BackgroundStyle { None, Aurora, Sunset, Lagoon, Violet };
+enum class QuickOutputMode { None, Copy, Save, Both };
+
 enum class RedactionStyle { Solid, Pixelate };
 
 struct Annotation {
@@ -76,6 +78,8 @@ struct Annotation {
                                    const QVector<Annotation> &annotations,
                                    BackgroundStyle backgroundStyle);
 [[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);
+[[nodiscard]] bool quickOutput(const QImage &image, QuickOutputMode mode,
+                               QString &error);
 [[nodiscard]] bool copyTextToClipboard(const QString &text, QString &error);
 void paintAnnotation(QPainter &painter, const Annotation &annotation);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
