@@ -215,7 +215,7 @@ Install the corresponding Tesseract language data before adding a language to
 | `S` | Spotlight/loupe; press again to cycle ellipse, rectangle, rounded |
 | `L` | Straight line |
 | `F` | Freehand stroke |
-| `I` | Sample the original image color as the custom annotation color |
+| `I` | Eyedropper in the color popover · sample the image as the custom color |
 | `C` | Numbered marker |
 | `R` | Rectangle |
 | `D` | Redact; press again to toggle randomized pixelation or solid redaction |

@@ -503,7 +503,7 @@ QRectF CaptureEditor::colorPaletteRect() const {
       std::max<qreal>(10, editImageRect().top() - buttonHeight - 10);
   const QRectF anchor(toolbarX + 360 * scale, toolbarY, 36 * scale,
                       buttonHeight);
-  const qreal paletteWidth = 204;
+  const qreal paletteWidth = 232;
   const qreal x = std::clamp(anchor.center().x() - paletteWidth / 2.0, 8.0,
                              std::max(8.0, width() - paletteWidth - 8.0));
   return {x, anchor.bottom() + 4, paletteWidth, 36};
@@ -736,8 +736,6 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   add(36, QStringLiteral("tool-redact"), {},
       QStringLiteral("Redact · D · %1 · D again toggles")
           .arg(redactionStyleName(redactionStyle_)));
-  add(36, QStringLiteral("tool-eyedropper"), {},
-      QStringLiteral("Sample source color · I"));
   add(36, QStringLiteral("tool-text"), {},
       QStringLiteral("Neucha text · T · %1 · Wheel")
           .arg(QString::fromLatin1(
@@ -773,6 +771,11 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
                        QStringLiteral("custom-color"),
                        {},
                        QStringLiteral("Custom color"),
+                       {}});
+    buttons.push_back({{palette.left() + 4 + 7 * 28, palette.top() + 4, 24, 28},
+                       QStringLiteral("tool-eyedropper"),
+                       {},
+                       QStringLiteral("Sample from image · I"),
                        {}});
   }
   return buttons;
@@ -1166,8 +1169,10 @@ void CaptureEditor::handleToolbar(const QString &action) {
                   .arg(redactionStyleName(redactionStyle_)));
   } else if (action == QStringLiteral("tool-text"))
     tool_ = Tool::Text;
-  else if (action == QStringLiteral("tool-eyedropper"))
+  else if (action == QStringLiteral("tool-eyedropper")) {
     tool_ = Tool::Eyedropper;
+    customColorPickerOpen_ = false;
+  }
   else if (action == QStringLiteral("tool-ocr"))
     tool_ = Tool::Ocr;
   else if (action == QStringLiteral("palette"))

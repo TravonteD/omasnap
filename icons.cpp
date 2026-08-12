@@ -105,6 +105,14 @@ void drawToolbarIcon(QPainter &painter, const QRectF &bounds,
     path.moveTo(8, 17);
     path.lineTo(13, 17);
     painter.drawPath(path);
+  } else if (action == QStringLiteral("tool-eyedropper")) {
+    painter.setBrush(color);
+    painter.drawEllipse(QPointF(8, 7), 4.2, 4.2);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawLine(QPointF(11, 10.2), QPointF(15.2, 14.4));
+    painter.drawLine(QPointF(13.6, 13.2), QPointF(19.2, 18.8));
+    painter.drawLine(QPointF(15.4, 11.4), QPointF(21, 17));
+    painter.drawLine(QPointF(18.2, 20.2), QPointF(21.2, 17.2));
   } else if (action == QStringLiteral("custom-color")) {
     QConicalGradient gradient(QPointF(12, 12), 90);
     gradient.setColorAt(0.0, QColor(QStringLiteral("#ff375f")));
