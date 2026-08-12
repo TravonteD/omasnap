@@ -1,4 +1,6 @@
 #include "pin.hpp"
+#include "pin-file.hpp"
+#include "pin-layout.hpp"
 #include "icons.hpp"
 
 #include <LayerShellQt/Window>
@@ -42,6 +44,7 @@ constexpr qreal kInitialScreenShare = 0.3;
 constexpr qreal kMaxWidthShare = 1.0 / 3.0;
 constexpr qreal kMaxHeightShare = 0.5;
 constexpr qreal kWheelStep = 0.1;
+constexpr int kPinGap = 10;
 constexpr int kToastMs = 1200;
 
 // wl-copy backgrounds itself and keeps serving the selection after this process
@@ -73,7 +76,7 @@ bool copyPngToClipboard(const QImage &image, QString &error) {
   return true;
 }
 
-bool copyTextToClipboard(const QString &text, QString &error) {
+bool copyPinTextToClipboard(const QString &text, QString &error) {
   QProcess copy;
   copy.start(
       QStringLiteral("wl-copy"),
@@ -96,11 +99,23 @@ bool copyTextToClipboard(const QString &text, QString &error) {
 class PinWindow final : public QWidget {
 public:
   explicit PinWindow(QImage image, QString path)
-      : image_(std::move(image)), path_(std::move(path)) {
+      : image_(std::move(image)), path_(std::move(path)), snapshotFile_(path_) {
     setWindowTitle(QStringLiteral("omasnap-pin"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     setMouseTracking(true);
     resize(initialSize());
+  }
+
+  [[nodiscard]] bool hasPinLock() const {
+    return snapshotFile_.isLocked() && slotLock_.isLocked();
+  }
+
+  [[nodiscard]] int slotIndex() const { return slotLock_.index(); }
+
+  [[nodiscard]] QSize availableSize() const {
+    const QScreen *target =
+        screen() ? screen() : QGuiApplication::primaryScreen();
+    return target ? target->availableGeometry().size() : QSize(1920, 1080);
   }
 
 protected:
@@ -182,7 +197,7 @@ protected:
       }
       if (pathButtonRect().contains(position)) {
         QString error;
-        showToast(copyTextToClipboard(path_, error)
+        showToast(copyPinTextToClipboard(path_, error)
                       ? QStringLiteral("Copied path")
                       : error);
         return;
@@ -191,20 +206,38 @@ protected:
         reopenInEditor();
         return;
       }
+      dragging_ = true;
+      dragOffset_ = position.toPoint();
+      event->accept();
     }
   }
 
-  // Send the pinned image back to the omasnap editor, replacing the pin.
   void reopenInEditor() {
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                  {path_}))
       showToast(QStringLiteral("Could not start omasnap"));
-    else
+    else {
+      snapshotFile_.preserveForEditor();
       close();
+    }
   }
 
   void mouseMoveEvent(QMouseEvent *event) override {
     const QPointF position = event->position();
+    if (dragging_) {
+      const QScreen *target =
+          screen() ? screen() : QGuiApplication::primaryScreen();
+      const QPoint origin =
+          target ? target->availableGeometry().topLeft() : QPoint();
+      const QRect bounds(QPoint(),
+                         target ? target->availableGeometry().size()
+                                : availableSize());
+      const QPoint requested = pinPositionFromGlobalPointer(
+          event->globalPosition().toPoint(), origin, dragOffset_);
+      applyPosition(clampPinGeometry(QRect(requested, size()), bounds).topLeft());
+      event->accept();
+      return;
+    }
     setCursor(controlRectAt(position) >= 0 ? Qt::PointingHandCursor
                                            : Qt::ArrowCursor);
 
@@ -214,6 +247,12 @@ protected:
       hoverTip_ = control >= 0 ? controlTip(control) : QString();
       update();
     }
+  }
+
+  void mouseReleaseEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton)
+      dragging_ = false;
+    QWidget::mouseReleaseEvent(event);
   }
 
   // A layer surface can still initiate a Wayland uri-list drag just like a
@@ -242,6 +281,9 @@ protected:
       return;
     const qreal factor = steps > 0 ? 1 + kWheelStep : 1 - kWheelStep;
     const QSize nextSize = scaledSize(qRound(width() * factor));
+    applyPosition(clampPinGeometry(QRect(position_, nextSize),
+                                   QRect(QPoint(), availableSize()))
+                      .topLeft());
     resize(nextSize);
     if (QWindow *handle = windowHandle()) {
       if (LayerShellQt::Window *layer = LayerShellQt::Window::get(handle))
@@ -297,12 +339,6 @@ private:
     }
   }
 
-  [[nodiscard]] QSize availableSize() const {
-    const QScreen *target =
-        screen() ? screen() : QGuiApplication::primaryScreen();
-    return target ? target->availableGeometry().size() : QSize(1920, 1080);
-  }
-
   // The rendered capture is in device pixels, so a scaled output would
   // otherwise open at twice its apparent size.
   [[nodiscard]] QSize initialSize() const {
@@ -345,6 +381,17 @@ private:
     });
   }
 
+  void applyPosition(QPoint position) {
+    position_ = position;
+    if (QWindow *handle = windowHandle()) {
+      if (LayerShellQt::Window *layer = LayerShellQt::Window::get(handle)) {
+        const QSize available = availableSize();
+        layer->setMargins(
+            QMargins(0, 0, available.width() - position.x() - width(),
+                     available.height() - position.y() - height()));
+      }
+    }
+  }
   // The wide drag handle stands alone in the top-left; edit, path, copy, and
   // close remain grouped in the top-right.
   [[nodiscard]] QRectF closeButtonRect() const { return controlRect(0); }
@@ -377,6 +424,11 @@ private:
 
   QImage image_;
   QString path_;
+  PinSnapshotFile snapshotFile_;
+  PinSlotLock slotLock_;
+  QPoint position_;
+  QPoint dragOffset_;
+  bool dragging_ = false;
   QString toast_;
   QString hoverTip_;
   bool hovered_ = false;
@@ -393,6 +445,10 @@ int runPinnedCapture(const QString &path) {
   }
 
   PinWindow window(std::move(image), path);
+  if (!window.hasPinLock()) {
+    qWarning("omasnap: could not lock pinned image %s", qUtf8Printable(path));
+    return 1;
+  }
   static_cast<void>(window.winId());
   QWindow *handle = window.windowHandle();
   LayerShellQt::Window *layer =
@@ -407,7 +463,14 @@ int runPinnedCapture(const QString &path) {
   anchors.setFlag(LayerShellQt::Window::AnchorBottom);
   anchors.setFlag(LayerShellQt::Window::AnchorRight);
   layer->setAnchors(anchors);
-  layer->setMargins(QMargins(0, 0, kCornerMargin, kCornerMargin));
+  const QPoint slot = pinSlotPosition(window.availableSize(), window.size(),
+                                      window.size(), window.slotIndex(),
+                                      kPinGap, kCornerMargin);
+  layer->setMargins(QMargins(0, 0,
+                             window.availableSize().width() - slot.x() -
+                                 window.width(),
+                             window.availableSize().height() - slot.y() -
+                                 window.height()));
   layer->setExclusiveZone(0);
   layer->setDesiredSize(window.size());
   layer->setKeyboardInteractivity(

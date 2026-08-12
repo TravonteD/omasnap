@@ -3,7 +3,10 @@
 #include "capture.hpp"
 #include "cli-path.hpp"
 #include "editor.hpp"
+#include "pin-layout-smoke.hpp"
+#include "pin-lifecycle-smoke.hpp"
 #include "transform-smoke.hpp"
+#include "eyedropper.hpp"
 
 #include <QApplication>
 #include <QDebug>
@@ -504,6 +507,55 @@ bool runQuickOutputChecks(QString &error) {
   }
   return true;
 }
+
+bool runSpotlightAndSampleChecks(QString &error) {
+  CaptureData capture;
+  capture.monitor.scale = 1.0;
+  capture.monitor.pixelSize = {80, 40};
+  capture.source = QImage(80, 40, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#204080")));
+  capture.source.setPixelColor(10, 20, QColor(QStringLiteral("#ff0000")));
+  capture.preview = capture.source;
+
+  Annotation line;
+  line.kind = Annotation::Kind::Line;
+  line.start = {5, 20};
+  line.end = {75, 20};
+  line.color = QColor(QStringLiteral("#00ff00"));
+  line.size = 4;
+  Annotation lens;
+  lens.kind = Annotation::Kind::Spotlight;
+  lens.start = {0, 0};
+  lens.end = {80, 40};
+  lens.magnification = 2.0;
+  lens.color = Qt::white;
+  const QImage rendered =
+      renderCapture(capture, QRectF(0, 0, 80, 40), {line, lens},
+                    BackgroundStyle::None);
+  if (rendered.isNull() || rendered.pixelColor(40, 2).alpha() < 100) {
+    error = QStringLiteral("Spotlight did not dim the surrounding image");
+    return false;
+  }
+
+  QImage checker(8, 4, QImage::Format_ARGB32);
+  checker.fill(QColor(255, 0, 0));
+  checker.setPixelColor(0, 0, QColor(0, 255, 0));
+  checker.setPixelColor(7, 0, QColor(0, 0, 255));
+  checker.setPixelColor(3, 1, QColor(10, 20, 30, 80));
+  const QColor mid = sampleSourceColor(checker, QSizeF(8, 4), QRectF(0, 0, 8, 4),
+                                       QRectF(0, 0, 80, 40), QPointF(35, 15));
+  const QColor right =
+      sampleSourceColor(checker, QSizeF(8, 4), QRectF(1.5, 0, 5, 4),
+                        QRectF(0, 0, 80, 40), QPointF(79, 5));
+  const QColor faded =
+      sampleSourceColor(checker, QSizeF(8, 4), QRectF(0, 0, 8, 4),
+                        QRectF(0, 0, 80, 40), QPointF(35, 15));
+  if (!mid.isValid() || right == QColor(0, 0, 255) || faded.alpha() != 255) {
+    error = QStringLiteral("Eyedropper sampled outside the crop or kept alpha");
+    return false;
+  }
+  return true;
+}
 } // namespace
 /** Runs the interaction and rendering smoke checks. */
 int main(int argc, char **argv) {
@@ -534,6 +586,18 @@ int main(int argc, char **argv) {
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 73;
+  }
+  if (!runPinLayoutSmoke(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 77;
+  }
+  if (!runPinLifecycleSmoke(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 78;
+  }
+  if (!runSpotlightAndSampleChecks(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 79;
   }
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])

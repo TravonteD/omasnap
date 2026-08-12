@@ -212,8 +212,10 @@ Install the corresponding Tesseract language data before adding a language to
 |---|---|
 | `V` | Select/move/resize layers; wheel scales the selected layer |
 | `A` | Arrow |
+| `S` | Spotlight/loupe; press again to cycle ellipse, rectangle, rounded |
 | `L` | Straight line |
 | `F` | Freehand stroke |
+| `I` | Sample the original image color as the custom annotation color |
 | `C` | Numbered marker |
 | `R` | Rectangle |
 | `D` | Redact; press again to toggle randomized pixelation or solid redaction |
@@ -222,7 +224,7 @@ Install the corresponding Tesseract language data before adding a language to
 | `B` | Cycle backdrop |
 | `1`–`6` | Set annotation color |
 | Wheel | Scale selected layer or change active tool size |
-| Hold `Shift` while dragging | Make rectangles square; snap lines and arrows to 45° increments |
+| Hold `Shift` while dragging | Make rectangles and spotlights 1:1; snap lines and arrows to 45° |
 | Double-click text | Reopen text editing |
 | `Delete` | Delete selected layer |
 | `Ctrl+Z` | Undo |
@@ -235,10 +237,11 @@ Install the corresponding Tesseract language data before adding a language to
 
 ### Pinned captures
 
-`P` renders the current capture, writes it to a `pin-<pid>-<n>.png` under the runtime
-snapshot directory, and launches the same `omasnap` executable in detached pin mode.
-The layer-shell surface is anchored 14 logical pixels from the bottom-right corner and
-stays visible on every workspace without compositor window rules. It preserves the image
+`P` renders the current capture, writes it to a `pin-<pid>-<n>-<random>.png` under
+the runtime snapshot directory, and launches the same `omasnap` executable in
+detached pin mode. Active pins stack from the bottom-right and can be dragged
+by the image background. The layer stays visible on every workspace without
+compositor window rules. It preserves the image
 aspect ratio, with a maximum width of one third of the screen and a maximum height of one
 half.
 

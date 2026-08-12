@@ -24,6 +24,7 @@
 #include <cerrno>
 #include <cmath>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <limits>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -191,10 +192,8 @@ bool parseMonitor(const QByteArray &json, MonitorInfo &monitor,
     const int rawWidth = object.value(QStringLiteral("width")).toInt();
     const int rawHeight = object.value(QStringLiteral("height")).toInt();
     const int transform = object.value(QStringLiteral("transform")).toInt();
-    int logicalWidth =
-        static_cast<int>(std::floor(rawWidth / std::max<qreal>(scale, 0.01)));
-    int logicalHeight =
-        static_cast<int>(std::floor(rawHeight / std::max<qreal>(scale, 0.01)));
+    int logicalWidth = qRound(rawWidth / std::max<qreal>(scale, 0.01));
+    int logicalHeight = qRound(rawHeight / std::max<qreal>(scale, 0.01));
     if (transform == 1 || transform == 3 || transform == 5 || transform == 7)
       std::swap(logicalWidth, logicalHeight);
 
@@ -256,7 +255,8 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   // Redactions replace source pixels in renderCapture before ordinary vector
   // annotations are painted. They must never be approximated by a translucent
   // overlay here because that could leave recoverable source data in exports.
-  if (annotation.kind == Annotation::Kind::Redaction)
+  if (annotation.kind == Annotation::Kind::Redaction ||
+      annotation.kind == Annotation::Kind::Spotlight)
     return;
 
   const qreal width = std::max<qreal>(2.0, annotation.size);
@@ -506,6 +506,91 @@ void paintAnnotation(QPainter &painter, const Annotation &annotation) {
   drawAnnotation(painter, annotation);
 }
 
+QPainterPath spotlightPath(const Annotation &annotation) {
+  const QRectF bounds = QRectF(annotation.start, annotation.end).normalized();
+  QPainterPath path;
+  if (annotation.spotlightShape == SpotlightShape::Ellipse) {
+    path.addEllipse(bounds);
+  } else if (annotation.spotlightShape == SpotlightShape::RoundedRectangle) {
+    const qreal shorterEdge = std::min(bounds.width(), bounds.height());
+    const qreal radius =
+        std::min(shorterEdge / 2.0, std::clamp(shorterEdge * 0.12, 3.0, 28.0));
+    path.addRoundedRect(bounds, radius, radius);
+  } else {
+    path.addRect(bounds);
+  }
+  return path;
+}
+
+void paintSpotlights(QPainter &painter, const QImage &source,
+                     const QRectF &targetBounds, const QRectF &sourceRect,
+                     const QVector<Annotation> &annotations) {
+  if (source.isNull() || targetBounds.isEmpty() || sourceRect.isEmpty())
+    return;
+
+  QVector<const Annotation *> spotlights;
+  QPainterPath dimmed;
+  dimmed.addRect(targetBounds);
+  for (const Annotation &annotation : annotations) {
+    if (annotation.kind != Annotation::Kind::Spotlight)
+      continue;
+    const QRectF lens =
+        QRectF(annotation.start, annotation.end).normalized().intersected(
+            targetBounds);
+    if (lens.width() < 1 || lens.height() < 1)
+      continue;
+    QPainterPath opening = spotlightPath(annotation);
+    QPainterPath targetClip;
+    targetClip.addRect(targetBounds);
+    opening = opening.intersected(targetClip);
+    dimmed = dimmed.subtracted(opening);
+    spotlights.push_back(&annotation);
+  }
+  if (spotlights.isEmpty())
+    return;
+
+  painter.save();
+  painter.setClipRect(targetBounds, Qt::IntersectClip);
+  painter.fillPath(dimmed, QColor(0, 0, 0, 154));
+  for (const Annotation *annotation : spotlights) {
+    const QRectF lens = QRectF(annotation->start, annotation->end).normalized();
+    const qreal magnification = std::clamp(annotation->magnification, 1.0, 4.0);
+    QSizeF sampleSize(sourceRect.width() * lens.width() / targetBounds.width() /
+                          magnification,
+                      sourceRect.height() * lens.height() /
+                          targetBounds.height() / magnification);
+    sampleSize.setWidth(std::min(sampleSize.width(), sourceRect.width()));
+    sampleSize.setHeight(std::min(sampleSize.height(), sourceRect.height()));
+    const QPointF normalizedCenter(
+        (lens.center().x() - targetBounds.left()) / targetBounds.width(),
+        (lens.center().y() - targetBounds.top()) / targetBounds.height());
+    const QPointF sampleCenter(
+        sourceRect.left() + normalizedCenter.x() * sourceRect.width(),
+        sourceRect.top() + normalizedCenter.y() * sourceRect.height());
+    QRectF sample(sampleCenter.x() - sampleSize.width() / 2.0,
+                  sampleCenter.y() - sampleSize.height() / 2.0,
+                  sampleSize.width(), sampleSize.height());
+    sample.moveLeft(std::clamp(sample.left(), sourceRect.left(),
+                               sourceRect.right() - sample.width()));
+    sample.moveTop(std::clamp(sample.top(), sourceRect.top(),
+                              sourceRect.bottom() - sample.height()));
+
+    const QPainterPath lensClip = spotlightPath(*annotation);
+    painter.save();
+    painter.setClipPath(lensClip, Qt::IntersectClip);
+    painter.drawImage(lens, source, sample);
+    painter.restore();
+
+    const QColor outline =
+        annotation->color.isValid() ? annotation->color : QColor(Qt::white);
+    painter.setPen(QPen(outline, std::max<qreal>(2.0, annotation->size / 2.0),
+                        Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(lensClip);
+  }
+  painter.restore();
+}
+
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle) {
   if (backgroundStyle == BackgroundStyle::None)
@@ -719,6 +804,8 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   painter.translate(marginX, marginY);
   painter.scale(scaleX, scaleY);
   painter.setClipRect(QRectF(QPointF(), selection.size()));
+  paintSpotlights(painter, cropped, QRectF(QPointF(), selection.size()),
+                  QRectF(cropped.rect()), annotations);
   for (const Annotation &annotation : annotations)
     drawAnnotation(painter, annotation);
   painter.restore();
@@ -795,9 +882,12 @@ QString temporarySnapshotPath() {
 }
 
 QString pinnedSnapshotPath(int index) {
-  return runtimePath(QStringLiteral("pin-%1-%2.png")
+  // A fresh nonce prevents collisions when the editor PID is recycled.
+  return runtimePath(QStringLiteral("pin-%1-%2-%3.png")
                          .arg(QCoreApplication::applicationPid())
-                         .arg(index));
+                         .arg(index)
+                         .arg(QRandomGenerator::global()->generate64(), 16, 16,
+                              QChar('0')));
 }
 
 void prunePinnedSnapshots() {
@@ -808,8 +898,15 @@ void prunePinnedSnapshots() {
   const QFileInfoList stale =
       QDir(runtime).entryInfoList({QStringLiteral("pin-*.png")}, QDir::Files);
   for (const QFileInfo &entry : stale) {
-    if (entry.lastModified() < cutoff)
+    if (entry.lastModified() >= cutoff)
+      continue;
+    const QByteArray encodedPath = QFile::encodeName(entry.absoluteFilePath());
+    const int fd = ::open(encodedPath.constData(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+      continue;
+    if (::flock(fd, LOCK_EX | LOCK_NB) == 0)
       QFile::remove(entry.absoluteFilePath());
+    ::close(fd);
   }
 }
 

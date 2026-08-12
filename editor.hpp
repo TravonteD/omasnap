@@ -41,11 +41,13 @@ public:
     Line,
     Freehand,
     Highlighter,
+    Spotlight,
     Marker,
     Rectangle,
     Redact,
     Text,
-    Ocr
+    Ocr,
+    Eyedropper
   };
 
 private:
@@ -155,6 +157,8 @@ private:
   int nextMarker_ = 1;
   qreal annotationSize_ = 4.0;
   int textSizeIndex_ = 1;
+  qreal spotlightMagnification_ = 2.0;
+  SpotlightShape spotlightShape_ = SpotlightShape::Ellipse;
   RedactionStyle redactionStyle_ = RedactionStyle::Pixelate;
   quint32 activeRedactionSeed_ = 0;
   QRectF cachedRedactionSelection_;

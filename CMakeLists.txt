@@ -36,8 +36,14 @@ qt_add_executable(omasnap
   icons.hpp
   pin.cpp
   pin.hpp
+  pin-file.cpp
+  pin-file.hpp
+  pin-layout.cpp
+  pin-layout.hpp
   capture.cpp
   capture.hpp
+  eyedropper.cpp
+  eyedropper.hpp
   surface-capture.cpp
   ${PROTOCOL_SOURCES}
   editor.cpp
@@ -80,6 +86,16 @@ qt_add_executable(omasnap-smoke
   ${PROTOCOL_SOURCES}
   editor.cpp
   editor.hpp
+  eyedropper.cpp
+  eyedropper.hpp
+  pin-file.cpp
+  pin-file.hpp
+  pin-layout.cpp
+  pin-layout.hpp
+  pin-lifecycle-smoke.cpp
+  pin-lifecycle-smoke.hpp
+  pin-layout-smoke.cpp
+  pin-layout-smoke.hpp
 )
 qt_add_resources(omasnap-smoke "capture-fonts-smoke"
   PREFIX "/fonts"

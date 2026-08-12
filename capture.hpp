@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include <QPainterPath>
 #include <QColor>
 #include <QImage>
 #include <QRect>
@@ -37,6 +38,7 @@ struct CaptureData {
 enum class BackgroundStyle { None, Aurora, Sunset, Lagoon, Violet };
 enum class QuickOutputMode { None, Copy, Save, Both };
 
+enum class SpotlightShape { Ellipse, Rectangle, RoundedRectangle };
 enum class RedactionStyle { Solid, Pixelate };
 
 struct Annotation {
@@ -48,7 +50,8 @@ struct Annotation {
     Marker,
     Rectangle,
     Text,
-    Redaction
+    Redaction,
+    Spotlight
   };
 
   Kind kind = Kind::Arrow;
@@ -60,6 +63,8 @@ struct Annotation {
   int number = 0;
   QVector<QPointF> points;
   RedactionStyle redactionStyle = RedactionStyle::Pixelate;
+  qreal magnification = 2.0;
+  SpotlightShape spotlightShape = SpotlightShape::Ellipse;
   quint32 redactionSeed = 0;
 
   bool operator==(const Annotation &) const = default;
@@ -82,6 +87,10 @@ struct Annotation {
                                QString &error);
 [[nodiscard]] bool copyTextToClipboard(const QString &text, QString &error);
 void paintAnnotation(QPainter &painter, const Annotation &annotation);
+[[nodiscard]] QPainterPath spotlightPath(const Annotation &annotation);
+void paintSpotlights(QPainter &painter, const QImage &source,
+                     const QRectF &targetBounds, const QRectF &sourceRect,
+                     const QVector<Annotation> &annotations);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle);
 /** Creates or repairs a private directory owned by the current user. */
