@@ -3,6 +3,7 @@
 #include "capture.hpp"
 #include "cli-path.hpp"
 #include "editor.hpp"
+#include "instance-lock-smoke.hpp"
 #include "pin-layout-smoke.hpp"
 #include "pin-lifecycle-smoke.hpp"
 #include "transform-smoke.hpp"
@@ -1023,6 +1024,12 @@ bool runSpotlightWheelSmoke(QApplication &application, QString &error) {
 } // namespace
 /** Runs the interaction and rendering smoke checks. */
 int main(int argc, char **argv) {
+  // Re-executed by the instance-lock checks as the process holding the lock.
+  const QString heldLockPath =
+      qEnvironmentVariable(kInstanceLockHolderVariable);
+  if (!heldLockPath.isEmpty())
+    return runInstanceLockHolder(heldLockPath);
+
   QApplication application(argc, argv);
   if (!loadCaptureFonts())
     return 17;
@@ -1973,6 +1980,11 @@ int main(int argc, char **argv) {
   if (!runTransformSmoke(transformError)) {
     qWarning().noquote() << transformError;
     return 67;
+  }
+  QString instanceError;
+  if (!runInstanceLockSmoke(instanceError)) {
+    qWarning().noquote() << instanceError;
+    return 85;
   }
   return 0;
 }
