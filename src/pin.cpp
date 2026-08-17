@@ -14,6 +14,7 @@
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainterPath>
 #include <QPainter>
 #include <QPixmap>
 #include <QProcess>
@@ -31,21 +32,18 @@
 
 namespace {
 
-constexpr int kMinimumEdge = 80;
 constexpr qreal kCloseButtonSize = 22;
 constexpr qreal kCloseButtonInset = 8;
 constexpr qreal kControlGap = 6;
 constexpr qreal kDragButtonWidth = kCloseButtonSize * 2 + kControlGap;
 constexpr qreal kCornerMargin = 14;
-constexpr qreal kInitialScreenShare = 0.3;
-
-// Hard caps for the corner pin: never wider than a third of the screen nor
-// taller than half.
-constexpr qreal kMaxWidthShare = 1.0 / 3.0;
-constexpr qreal kMaxHeightShare = 0.5;
-constexpr qreal kWheelStep = 0.1;
 constexpr int kPinGap = 10;
 constexpr int kToastMs = 1200;
+constexpr qreal kVisualInset = 8;
+constexpr qreal kVisualRadius = 12;
+constexpr qreal kControlsHeight = 36;
+constexpr int kPinWidth = 250;
+constexpr int kPinHeight = 200;
 
 // wl-copy backgrounds itself and keeps serving the selection after this process
 // exits, which QClipboard cannot do on Wayland.
@@ -102,7 +100,7 @@ public:
       : image_(std::move(image)), path_(std::move(path)), snapshotFile_(path_) {
     setWindowTitle(QStringLiteral("omasnap-pin"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    setMouseTracking(true);
+    setAttribute(Qt::WA_TranslucentBackground);
     resize(initialSize());
   }
 
@@ -121,14 +119,42 @@ public:
 protected:
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.drawImage(rect(), image_);
+
+    const QRectF frame =
+        QRectF(rect()).adjusted(kVisualInset, kVisualInset, -kVisualInset,
+                                -kVisualInset);
+    for (int layer = 8; layer > 0; --layer) {
+      const qreal spread = layer * 1.5;
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(QColor(0, 0, 0, 10 + (8 - layer) * 3));
+      painter.drawRoundedRect(
+          frame.adjusted(-spread, -spread, spread, spread),
+          kVisualRadius + spread, kVisualRadius + spread);
+    }
+    painter.setBrush(QColor(18, 18, 22, 245));
+    painter.drawRoundedRect(frame, kVisualRadius, kVisualRadius);
+
+    const QRectF imageArea =
+        frame.adjusted(0, kControlsHeight, 0, -kVisualInset);
+    const QSize fitted =
+        image_.size().scaled(imageArea.size().toSize(), Qt::KeepAspectRatio);
+    const QRectF imageRect(
+        imageArea.center().x() - fitted.width() / 2.0,
+        imageArea.center().y() - fitted.height() / 2.0, fitted.width(),
+        fitted.height());
+    QPainterPath clip;
+    clip.addRoundedRect(imageRect, kVisualRadius, kVisualRadius);
+    painter.save();
+    painter.setClipPath(clip);
+    painter.drawImage(imageRect, image_);
+    painter.restore();
     if (!toast_.isEmpty())
       paintToast(painter);
     if (!hovered_)
       return;
 
-    painter.setRenderHint(QPainter::Antialiasing, true);
     drawControlButton(painter, dragButtonRect(), QStringLiteral("drag-handle"));
     drawControlButton(painter, editButtonRect(), QStringLiteral("edit"));
     drawControlButton(painter, pathButtonRect(), QStringLiteral("path"));
@@ -276,19 +302,8 @@ protected:
   }
 
   void wheelEvent(QWheelEvent *event) override {
-    const int steps = event->angleDelta().y();
-    if (steps == 0)
-      return;
-    const qreal factor = steps > 0 ? 1 + kWheelStep : 1 - kWheelStep;
-    const QSize nextSize = scaledSize(qRound(width() * factor));
-    applyPosition(clampPinGeometry(QRect(position_, nextSize),
-                                   QRect(QPoint(), availableSize()))
-                      .topLeft());
-    resize(nextSize);
-    if (QWindow *handle = windowHandle()) {
-      if (LayerShellQt::Window *layer = LayerShellQt::Window::get(handle))
-        layer->setDesiredSize(nextSize);
-    }
+    // Pinned captures deliberately keep a stable 250x200 frame so the
+    // controls remain usable and the image area never reflows.
     event->accept();
   }
 
@@ -339,37 +354,8 @@ private:
     }
   }
 
-  // The rendered capture is in device pixels, so a scaled output would
-  // otherwise open at twice its apparent size.
   [[nodiscard]] QSize initialSize() const {
-    const QScreen *target =
-        screen() ? screen() : QGuiApplication::primaryScreen();
-    const qreal ratio =
-        target ? std::max<qreal>(1.0, target->devicePixelRatio()) : 1.0;
-    const QSizeF logical = QSizeF(image_.size()) / ratio;
-    const QSizeF limit = QSizeF(availableSize()) * kInitialScreenShare;
-    const qreal fit = std::min({1.0, limit.width() / logical.width(),
-                                limit.height() / logical.height()});
-    return scaledSize(qRound(logical.width() * fit));
-  }
-
-  // Fit a target width into the max width/height caps while keeping the
-  // capture's aspect ratio.
-  [[nodiscard]] QSize scaledSize(int targetWidth) const {
-    const qreal aspect = image_.height() / static_cast<qreal>(image_.width());
-    const QSize available = availableSize();
-    const qreal maxW =
-        std::max<qreal>(kMinimumEdge, available.width() * kMaxWidthShare);
-    const qreal maxH =
-        std::max<qreal>(kMinimumEdge, available.height() * kMaxHeightShare);
-    qreal width = std::clamp(static_cast<qreal>(targetWidth),
-                             static_cast<qreal>(kMinimumEdge), maxW);
-    qreal height = width * aspect;
-    if (height > maxH) {
-      height = maxH;
-      width = height / aspect;
-    }
-    return QSize(qRound(width), qRound(height));
+    return {kPinWidth, kPinHeight};
   }
 
   void showToast(QString message) {

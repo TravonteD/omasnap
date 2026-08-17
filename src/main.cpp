@@ -246,33 +246,20 @@ int main(int argc, char **argv) {
                              .arg(localFile)
                              .arg(image.width())
                              .arg(image.height());
-  } else if (!captureFocusedMonitor(capture, error)) {
+  } else if (!probeFocusedMonitor(capture.monitor, error)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
   }
 
-  if (filePath.isEmpty())
-    qInfo().noquote() << QStringLiteral(
-                             "Captured %1 workspace %2 with %3 selectable "
-                             "windows")
-                             .arg(capture.monitor.name)
-                             .arg(capture.monitor.workspaceId)
-                             .arg(capture.windows.size());
-
-  if (filePath.isEmpty() &&
-      captureMode == CaptureEditor::CaptureMode::Fullscreen &&
-      quickOutputMode != QuickOutputMode::None) {
-    QString outputError;
-    if (!quickOutput(renderCapture(capture,
-                                   QRectF(QPointF(), capture.preview.size()),
-                                   {}, BackgroundStyle::None),
-                     quickOutputMode, outputError)) {
-      qCritical().noquote() << outputError;
-      return 1;
-    }
-    return 0;
-  }
+  // Fullscreen quick output never shows an overlay: the capture runs in the
+  // background and the result is written out without opening the editor UI.
+  const bool instantFullscreenOutput =
+      filePath.isEmpty() && captureMode == CaptureEditor::CaptureMode::Fullscreen &&
+      quickOutputMode != QuickOutputMode::None;
+  const QuickOutputMode editorQuickOutput = instantFullscreenOutput
+                                                ? QuickOutputMode::None
+                                                : quickOutputMode;
 
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {
@@ -282,31 +269,70 @@ int main(int argc, char **argv) {
     }
   }
 
-  CaptureEditor editor(std::move(capture), captureMode, quickOutputMode);
-  editor.setScreen(targetScreen);
-  editor.setGeometry(targetScreen->geometry());
-  editor.winId();
-  QWindow *window = editor.windowHandle();
-  LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
-  if (!window || !layerWindow) {
-    qCritical() << "Could not create capture overlay layer";
-    return 1;
+  CaptureEditor editor(std::move(capture), captureMode, editorQuickOutput);
+  if (instantFullscreenOutput)
+    editor.setSuppressSnapshots(true);
+  QObject::connect(&editor, &CaptureEditor::captureReady, &editor,
+                   [&editor, instantFullscreenOutput, quickOutputMode](
+                       bool ok, const QString &error) {
+                     if (!ok) {
+                       sendCaptureNotification(
+                           QStringLiteral("Screenshot failed: %1").arg(error));
+                       QCoreApplication::exit(1);
+                       return;
+                     }
+                     const CaptureData &data = editor.captureData();
+                     if (instantFullscreenOutput) {
+                       QString outputError;
+                       if (!quickOutput(
+                               renderCapture(
+                                   data,
+                                   QRectF(QPointF(), data.preview.size()), {},
+                                   BackgroundStyle::None),
+                               quickOutputMode, outputError)) {
+                         qCritical().noquote() << outputError;
+                         QCoreApplication::exit(1);
+                         return;
+                       }
+                       QCoreApplication::quit();
+                       return;
+                     }
+                     qInfo().noquote() << QStringLiteral(
+                         "Captured %1 workspace %2 with %3 selectable windows")
+                                              .arg(data.monitor.name)
+                                              .arg(data.monitor.workspaceId)
+                                              .arg(data.windows.size());
+                   });
+
+  if (!instantFullscreenOutput) {
+    editor.setScreen(targetScreen);
+    editor.setGeometry(targetScreen->geometry());
+    editor.winId();
+    QWindow *window = editor.windowHandle();
+    LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
+    if (!window || !layerWindow) {
+      qCritical() << "Could not create capture overlay layer";
+      return 1;
+    }
+    layerWindow->setScope(QStringLiteral("omasnap"));
+    layerWindow->setScreen(targetScreen);
+    layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
+    LayerShellQt::Window::Anchors anchors;
+    anchors.setFlag(LayerShellQt::Window::AnchorTop);
+    anchors.setFlag(LayerShellQt::Window::AnchorBottom);
+    anchors.setFlag(LayerShellQt::Window::AnchorLeft);
+    anchors.setFlag(LayerShellQt::Window::AnchorRight);
+    layerWindow->setAnchors(anchors);
+    layerWindow->setExclusiveZone(-1);
+    layerWindow->setKeyboardInteractivity(
+        LayerShellQt::Window::KeyboardInteractivityExclusive);
+    layerWindow->setActivateOnShow(true);
+    editor.show();
+    editor.setFocus(Qt::ActiveWindowFocusReason);
   }
-  layerWindow->setScope(QStringLiteral("omasnap"));
-  layerWindow->setScreen(targetScreen);
-  layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
-  LayerShellQt::Window::Anchors anchors;
-  anchors.setFlag(LayerShellQt::Window::AnchorTop);
-  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-  anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-  anchors.setFlag(LayerShellQt::Window::AnchorRight);
-  layerWindow->setAnchors(anchors);
-  layerWindow->setExclusiveZone(-1);
-  layerWindow->setKeyboardInteractivity(
-      LayerShellQt::Window::KeyboardInteractivityExclusive);
-  layerWindow->setActivateOnShow(true);
-  editor.show();
-  editor.setFocus(Qt::ActiveWindowFocusReason);
+
+  if (filePath.isEmpty())
+    editor.startCapture(captureMode);
 
   return application.exec();
 }

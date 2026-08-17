@@ -26,7 +26,6 @@
 #include <cmath>
 #include <fcntl.h>
 #include <sys/file.h>
-#include <limits>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -662,17 +661,22 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
   }
 }
 
-bool captureFocusedMonitor(CaptureData &capture, QString &error) {
+bool probeFocusedMonitor(MonitorInfo &monitor, QString &error) {
   const ProcessResult monitors =
       runProcess(QStringLiteral("hyprctl"),
                  {QStringLiteral("monitors"), QStringLiteral("-j")});
   if (!monitors.finished || monitors.exitCode != 0 ||
-      !parseMonitor(monitors.output, capture.monitor, error)) {
+      !parseMonitor(monitors.output, monitor, error)) {
     if (error.isEmpty())
       error = QString::fromUtf8(monitors.error).trimmed();
     return false;
   }
+  return true;
+}
 
+bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
+                          QString &error) {
+  capture.monitor = monitor;
   const QString sourceTemplate =
       runtimePath(QStringLiteral("omasnap-capture-XXXXXX.ppm"));
   if (sourceTemplate.isEmpty()) {
@@ -721,6 +725,12 @@ bool captureFocusedMonitor(CaptureData &capture, QString &error) {
   if (clients.finished && clients.exitCode == 0)
     capture.windows = parseWindows(clients.output, capture.monitor);
   return true;
+}
+
+bool captureFocusedMonitor(CaptureData &capture, QString &error) {
+  if (!probeFocusedMonitor(capture.monitor, error))
+    return false;
+  return captureMonitorPixels(capture.monitor, capture, error);
 }
 
 QImage renderCapture(const CaptureData &capture, const QRectF &selection,
@@ -812,6 +822,32 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   painter.restore();
   painter.end();
   return output;
+}
+
+QImage renderSelectionBase(const CaptureData &capture, const QRectF &selection,
+                           const QSize &targetSize) {
+  const QRect pixels = pixelSelection(capture, selection);
+  if (pixels.isEmpty() || targetSize.isEmpty())
+    return {};
+  QImage cropped = capture.source.copy(pixels).convertToFormat(
+      QImage::Format_ARGB32_Premultiplied);
+  if (cropped.size() != targetSize)
+    cropped = cropped.scaled(targetSize, Qt::IgnoreAspectRatio,
+                             Qt::SmoothTransformation);
+  return cropped;
+}
+
+QImage applyRedactionsScaled(QImage image, const QVector<Annotation> &redactions,
+                             const QRectF &selection, const QSizeF &targetSize) {
+  if (image.isNull() || redactions.isEmpty() || selection.isEmpty() ||
+      targetSize.isEmpty())
+    return image;
+  const qreal scaleX = targetSize.width() / selection.width();
+  const qreal scaleY = targetSize.height() / selection.height();
+  applyRedactions(image, redactions, scaleX, scaleY,
+                  QPointF(-selection.left() * scaleX,
+                          -selection.top() * scaleY));
+  return image;
 }
 
 bool copyPngFileToClipboard(const QString &path, QString &error) {

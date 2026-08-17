@@ -72,6 +72,19 @@ struct Annotation {
 
 [[nodiscard]] bool loadCaptureFonts();
 [[nodiscard]] QFont annotationTextFont(qreal size);
+/**
+ * Discovers the focused monitor (name, geometry, scale). Fast: only one
+ * `hyprctl monitors` call. Safe to call on the main thread to position the
+ * overlay before the pixel capture itself runs in the background.
+ */
+[[nodiscard]] bool probeFocusedMonitor(MonitorInfo &monitor, QString &error);
+/**
+ * Captures the focused monitor's pixels and window list onto the given
+ * monitor. Pure I/O and image work (no GUI objects): safe on any thread.
+ */
+[[nodiscard]] bool captureMonitorPixels(const MonitorInfo &monitor,
+                                        CaptureData &capture, QString &error);
+/** Convenience: probes the focused monitor, then captures its pixels. */
 [[nodiscard]] bool captureFocusedMonitor(CaptureData &capture, QString &error);
 [[nodiscard]] bool captureWindowSurface(const WindowTarget &window,
                                         QImage &image, QString &error);
@@ -93,6 +106,21 @@ void paintSpotlights(QPainter &painter, const QImage &source,
                      const QVector<Annotation> &annotations);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle);
+/**
+ * Renders the selection region at `targetSize` for redaction previews. The
+ * result carries no annotations; callers overlay redactions with
+ * applyRedactionsScaled and cache it while the selection is unchanged.
+ */
+[[nodiscard]] QImage renderSelectionBase(const CaptureData &capture,
+                                         const QRectF &selection,
+                                         const QSize &targetSize);
+/**
+ * Paints redaction annotations over a display-resolution selection image. The
+ * source image MUST be the exact selection region scaled to `targetSize`;
+ * annotations live in the same logical coordinate space as `selection`.
+ */
+QImage applyRedactionsScaled(QImage image, const QVector<Annotation> &redactions,
+                             const QRectF &selection, const QSizeF &targetSize);
 /** Creates or repairs a private directory owned by the current user. */
 [[nodiscard]] bool ensurePrivateDirectory(const QString &path);
 /** Returns Omasnap's private runtime directory, or empty on failure. */

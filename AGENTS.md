@@ -27,26 +27,33 @@ pinned always-on-top layer surface.
 
 | Path | Purpose |
 |---|---|
-| `main.cpp` | CLI parsing, single-instance lock, mode dispatch (capture / edit file / pin) |
-| `capture.cpp/.hpp` | Capture selection overlay, snapshot lifecycle under `/run/user/<UID>/omasnap/` |
-| `editor.cpp/.hpp` | Annotation editor: tools, layers, undo/redo, rendering, export |
-| `pin.cpp/.hpp` | Pinned-capture layer-shell surfaces (bottom-right, all workspaces) |
-| `surface-capture.cpp` | Clean window capture via `ext-image-copy-capture` Wayland protocol |
-| `icons.cpp/.hpp` | Vector icon renderer for toolbar and pin controls |
-| `editor-smoke.cpp`, `transform-smoke.cpp` | Headless smoke tests (Qt Test, offscreen platform) |
+| `src/main.cpp` | CLI parsing, single-instance lock, mode dispatch (capture / edit file / pin) |
+| `src/capture.cpp/.hpp` | Capture selection overlay, rendering, output, and private runtime snapshots |
+| `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, undo/redo, rendering, export |
+| `src/pin.cpp/.hpp` | Pinned-capture layer-shell surfaces (bottom-right, all workspaces) |
+| `src/surface-capture.cpp` | Clean window capture via `ext-image-copy-capture` Wayland protocol |
+| `src/icons.cpp/.hpp` | Vector icon renderer for toolbar and pin controls |
+| `src/cli-path.cpp/.hpp` | Command-line image target resolution |
+| `src/eyedropper.cpp/.hpp` | Display-to-source color sampling |
+| `src/pin-file.cpp/.hpp`, `src/pin-layout.cpp/.hpp` | Pin file lifecycle and layout helpers |
+| `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including offscreen region-click and async-capture checks |
 | `install-omarchy` | Omarchy installer (deps via `omarchy-pkg-add`, installs to `~/.local`) |
 | `CMakeLists.txt` | Build definition; **the version lives here** (`project(omasnap VERSION ...)`) |
 
 ## Build and verify
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-QT_QPA_PLATFORM=offscreen ./build/omasnap-smoke /tmp/omasnap-smoke
+make check
 ```
 
-Always run the smoke test after behavioral changes — it exercises startup
-modes, tools, undo/redo, OCR, and native-DPI output headlessly. CI
+`make check` configures and builds the project, runs the complete headless
+offscreen Qt smoke suite (including simulated region clicks and asynchronous
+capture), runs `clang-tidy`, and runs `clazy-standalone`/`qmllint` when those
+tools and source types are available. Use `make build` for a build-only pass,
+`make smoke` for the behavioral smoke suite, and `make install` to install to
+`~/.local`.
+
+Always run `make check` after behavioral changes. CI
 (`.github/workflows/build-linux.yml`) runs the same build and smoke on every
 push and PR.
 

@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
-project(omasnap VERSION 1.12.0 LANGUAGES C CXX)
+project(omasnap VERSION 1.13.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
+set(CMAKE_AUTOMOC ON)
 
 find_package(PkgConfig REQUIRED)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
@@ -29,25 +30,25 @@ foreach(PROTOCOL_XML IN LISTS PROTOCOL_XMLS)
 endforeach()
 
 qt_add_executable(omasnap
-  main.cpp
-  cli-path.cpp
-  cli-path.hpp
-  icons.cpp
-  icons.hpp
-  pin.cpp
-  pin.hpp
-  pin-file.cpp
-  pin-file.hpp
-  pin-layout.cpp
-  pin-layout.hpp
-  capture.cpp
-  capture.hpp
-  eyedropper.cpp
-  eyedropper.hpp
-  surface-capture.cpp
+  src/main.cpp
+  src/cli-path.cpp
+  src/cli-path.hpp
+  src/icons.cpp
+  src/icons.hpp
+  src/pin.cpp
+  src/pin.hpp
+  src/pin-file.cpp
+  src/pin-file.hpp
+  src/pin-layout.cpp
+  src/pin-layout.hpp
+  src/capture.cpp
+  src/capture.hpp
+  src/eyedropper.cpp
+  src/eyedropper.hpp
+  src/surface-capture.cpp
   ${PROTOCOL_SOURCES}
-  editor.cpp
-  editor.hpp
+  src/editor.cpp
+  src/editor.hpp
 )
 qt_add_resources(omasnap "capture-fonts"
   PREFIX "/fonts"
@@ -55,7 +56,10 @@ qt_add_resources(omasnap "capture-fonts"
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
 )
 
-target_include_directories(omasnap PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(omasnap PRIVATE
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 target_compile_features(omasnap PRIVATE cxx_std_23)
 target_compile_options(omasnap PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(omasnap PRIVATE
@@ -72,37 +76,41 @@ target_link_libraries(omasnap PRIVATE
 
 
 qt_add_executable(omasnap-smoke
-  editor-smoke.cpp
-  icons.cpp
-  icons.hpp
-  transform-smoke.cpp
-  transform-smoke.hpp
-  cli-path.cpp
-  cli-path.hpp
-  capture.cpp
-  capture.hpp
-  surface-capture-smoke.cpp
-  surface-capture-smoke.hpp
+  tests/editor-smoke.cpp
+  src/icons.cpp
+  src/icons.hpp
+  tests/transform-smoke.cpp
+  tests/transform-smoke.hpp
+  src/cli-path.cpp
+  src/cli-path.hpp
+  src/capture.cpp
+  src/capture.hpp
+  tests/surface-capture-smoke.cpp
+  tests/surface-capture-smoke.hpp
   ${PROTOCOL_SOURCES}
-  editor.cpp
-  editor.hpp
-  eyedropper.cpp
-  eyedropper.hpp
-  pin-file.cpp
-  pin-file.hpp
-  pin-layout.cpp
-  pin-layout.hpp
-  pin-lifecycle-smoke.cpp
-  pin-lifecycle-smoke.hpp
-  pin-layout-smoke.cpp
-  pin-layout-smoke.hpp
+  src/editor.cpp
+  src/editor.hpp
+  src/eyedropper.cpp
+  src/eyedropper.hpp
+  src/pin-file.cpp
+  src/pin-file.hpp
+  src/pin-layout.cpp
+  src/pin-layout.hpp
+  tests/pin-lifecycle-smoke.cpp
+  tests/pin-lifecycle-smoke.hpp
+  tests/pin-layout-smoke.cpp
+  tests/pin-layout-smoke.hpp
 )
 qt_add_resources(omasnap-smoke "capture-fonts-smoke"
   PREFIX "/fonts"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
 )
-target_include_directories(omasnap-smoke PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(omasnap-smoke PRIVATE
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+)
 target_compile_features(omasnap-smoke PRIVATE cxx_std_23)
 target_compile_options(omasnap-smoke PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(omasnap-smoke PRIVATE

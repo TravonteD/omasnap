@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
+#include <QThread>
 #include <QFile>
 #include <QFileInfo>
 #include <QPainter>
@@ -26,6 +27,13 @@
 #include <sys/resource.h>
 
 namespace {
+/**
+ * The current output is a memory-only composite until an explicit save/copy.
+ */
+template <typename Editor>
+QImage flushedSnapshot(Editor &editor, const QString &) {
+  return editor.renderCurrentOutput();
+}
 /** Checks that positional local image targets are recognized. */
 bool runPositionalImageTargetCheck(QString &error) {
   QTemporaryDir directory;
@@ -579,7 +587,6 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
   application.processEvents();
 
   QTest::keyClick(&editor, Qt::Key_A);
-  application.processEvents();
   if (editor.cursor().shape() != Qt::CrossCursor) {
     error = QStringLiteral("Arrow tool did not set cross cursor");
     return false;
@@ -609,6 +616,13 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
     return false;
   }
 
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(120, 120));
+  QTest::mouseMove(&editor, QPoint(560, 260), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(560, 260));
+  QTest::keyClick(&editor, Qt::Key_Delete);
+  application.processEvents();
   QTest::keyClick(&editor, Qt::Key_M);
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor) {
@@ -704,6 +718,118 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
   editor.close();
   return true;
 }
+bool runAsyncCaptureRegionSmoke(QApplication &application, QString &error) {
+  QTemporaryDir commands;
+  if (!commands.isValid()) {
+    error = QStringLiteral("Could not create async capture command directory");
+    return false;
+  }
+
+  const auto writeExecutable = [](const QString &path,
+                                  const QByteArray &contents) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size())
+      return false;
+    file.close();
+    return QFile::setPermissions(
+        path, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner);
+  };
+  const QString fakeHyprctl = QDir(commands.path()).filePath(QStringLiteral("hyprctl"));
+  const QString fakeGrim = QDir(commands.path()).filePath(QStringLiteral("grim"));
+  const QByteArray hyprctlScript =
+      QByteArrayLiteral("#!/usr/bin/env bash\n"
+                        "if [[ \"$1 $2\" == \"monitors -j\" ]]; then\n"
+                        "  printf '%s\\n' "
+                        "'[{\"focused\":true,\"scale\":1,\"width\":320,"
+                        "\"height\":240,\"transform\":0,\"name\":\"TEST\","
+                        "\"x\":0,\"y\":0,\"activeWorkspace\":{\"id\":7}}]'\n"
+                        "else\n"
+                        "  printf '[]\\n'\n"
+                        "fi\n");
+  const QByteArray grimScript =
+      QByteArrayLiteral("#!/usr/bin/env bash\n"
+                        "set -euo pipefail\n"
+                        "cp -- \"$OMASNAP_TEST_PPM\" \"${@: -1}\"\n");
+  if (!writeExecutable(fakeHyprctl, hyprctlScript) ||
+      !writeExecutable(fakeGrim, grimScript)) {
+    error = QStringLiteral("Could not create async capture commands");
+    return false;
+  }
+
+  QImage source(320, 240, QImage::Format_RGB32);
+  source.fill(QColor(QStringLiteral("#28405c")));
+  const QString sourcePath =
+      QDir(commands.path()).filePath(QStringLiteral("source.ppm"));
+  if (!source.save(sourcePath, "PPM")) {
+    error = QStringLiteral("Could not create async capture source");
+    return false;
+  }
+
+  const QByteArray oldPath = qgetenv("PATH");
+  const QByteArray oldPpm = qgetenv("OMASNAP_TEST_PPM");
+  qputenv("PATH", commands.path().toUtf8() + ':' + oldPath);
+  qputenv("OMASNAP_TEST_PPM", sourcePath.toUtf8());
+
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 320, 240};
+  capture.monitor.pixelSize = {320, 240};
+  CaptureEditor editor(capture);
+  editor.resize(320, 240);
+  editor.show();
+  application.processEvents();
+
+  bool ready = false;
+  QString captureError;
+  QObject::connect(&editor, &CaptureEditor::captureReady, &editor,
+                   [&ready, &captureError](bool ok, const QString &message) {
+                     ready = ok;
+                     captureError = message;
+                   });
+  editor.startCapture(CaptureEditor::CaptureMode::Region);
+
+  QElapsedTimer timer;
+  timer.start();
+  while (!ready && timer.elapsed() < 5000) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+  if (!ready) {
+    error = captureError.isEmpty()
+                ? QStringLiteral("Async monitor capture did not complete")
+                : captureError;
+    editor.close();
+    qputenv("PATH", oldPath);
+    if (oldPpm.isEmpty())
+      qunsetenv("OMASNAP_TEST_PPM");
+    else
+      qputenv("OMASNAP_TEST_PPM", oldPpm);
+    return false;
+  }
+
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 30));
+  QTest::mouseMove(&editor, QPoint(200, 180), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(200, 180));
+  application.processEvents();
+  const QImage selected = editor.renderCurrentOutput();
+  editor.close();
+  qputenv("PATH", oldPath);
+  if (oldPpm.isEmpty())
+    qunsetenv("OMASNAP_TEST_PPM");
+  else
+    qputenv("OMASNAP_TEST_PPM", oldPpm);
+
+  if (selected.size() != QSize(160, 150)) {
+    error = QStringLiteral("Async capture region selection produced %1x%2")
+                .arg(selected.width())
+                .arg(selected.height());
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 /** Runs the interaction and rendering smoke checks. */
 int main(int argc, char **argv) {
@@ -734,6 +860,10 @@ int main(int argc, char **argv) {
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 73;
+  }
+  if (!runAsyncCaptureRegionSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 82;
   }
   if (!runPinLayoutSmoke(snapshotError)) {
     qWarning().noquote() << snapshotError;
@@ -840,7 +970,7 @@ int main(int argc, char **argv) {
 
     dragRectangle(true);
     const QImage freeExpected = expectedRectangle(QPointF(295, 160));
-    if (QImage(snapshotPath).convertToFormat(freeExpected.format()) !=
+    if (flushedSnapshot(constraintEditor, snapshotPath).convertToFormat(freeExpected.format()) !=
         freeExpected)
       return 91;
     QTest::keyClick(&constraintEditor, Qt::Key_Z, Qt::ControlModifier);
@@ -848,7 +978,7 @@ int main(int argc, char **argv) {
 
     dragRectangle(false);
     const QImage constrainedExpected = expectedRectangle(QPointF(295, 220));
-    if (QImage(snapshotPath).convertToFormat(constrainedExpected.format()) !=
+    if (flushedSnapshot(constraintEditor, snapshotPath).convertToFormat(constrainedExpected.format()) !=
         constrainedExpected)
       return 92;
     constraintEditor.close();
@@ -899,7 +1029,7 @@ int main(int argc, char **argv) {
     QTest::mouseRelease(&cropEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(0, leftHandle.y()));
     application.processEvents();
-    const QImage cropped(snapshotPath);
+    const QImage cropped = flushedSnapshot(cropEditor, snapshotPath);
     if (cropped.isNull() || cropped.width() < 16 || cropped.width() > 64 ||
         cropped.height() != 64)
       return 93;
@@ -932,10 +1062,8 @@ int main(int argc, char **argv) {
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(650, 470));
   application.processEvents();
-  const QFileInfo initialSnapshotInfo(snapshotPath);
-  const QImage initialSnapshot(snapshotPath);
-  if (!initialSnapshotInfo.exists() || initialSnapshotInfo.size() <= 0 ||
-      initialSnapshot.isNull())
+  const QImage initialSnapshot = flushedSnapshot(editor, snapshotPath);
+  if (initialSnapshot.isNull())
     return 37;
   if (editor.cursor().shape() != Qt::ArrowCursor ||
       !editor.grab().save(outputRoot + QStringLiteral("-selector-default.png"),
@@ -954,7 +1082,7 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (editor.cursor().shape() != Qt::CrossCursor)
     return 26;
-  const QImage arrowSnapshot(snapshotPath);
+  const QImage arrowSnapshot = flushedSnapshot(editor, snapshotPath);
   if (arrowSnapshot.isNull() || arrowSnapshot == initialSnapshot)
     return 38;
   QTest::mouseClick(&editor, Qt::RightButton, Qt::NoModifier, QPoint(100, 100));
@@ -968,17 +1096,17 @@ int main(int argc, char **argv) {
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(420, 315));
   application.processEvents();
-  if (QImage(snapshotPath) != initialSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != initialSnapshot)
     return 56;
   QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != arrowSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != arrowSnapshot)
     return 57;
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(140, 140));
   application.processEvents();
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
-  if (QImage(snapshotPath) != arrowSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != arrowSnapshot)
     return 39;
   QTest::keyClick(&editor, Qt::Key_L);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(260, 210));
@@ -988,16 +1116,16 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (editor.cursor().shape() != Qt::CrossCursor)
     return 27;
-  const QImage lineSnapshot(snapshotPath);
+  const QImage lineSnapshot = flushedSnapshot(editor, snapshotPath);
   if (lineSnapshot.isNull() || lineSnapshot == arrowSnapshot)
     return 40;
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != arrowSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != arrowSnapshot)
     return 41;
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != lineSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != lineSnapshot)
     return 42;
 
   QTest::keyClick(&editor, Qt::Key_V);
@@ -1027,18 +1155,18 @@ int main(int argc, char **argv) {
       editor.grab().toImage().copy(QRect(100, 150, 600, 350));
   if (beforeSelectorZoom == afterSelectorZoom)
     return 30;
-  const QImage scaledLineSnapshot(snapshotPath);
+  const QImage scaledLineSnapshot = flushedSnapshot(editor, snapshotPath);
   if (scaledLineSnapshot.isNull() || scaledLineSnapshot == lineSnapshot)
     return 45;
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != lineSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != lineSnapshot)
     return 46;
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != scaledLineSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != scaledLineSnapshot)
     return 47;
-  const QImage beforeFreehandSnapshot(snapshotPath);
+  const QImage beforeFreehandSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_F);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(270, 390));
   QTest::mouseMove(&editor, QPoint(330, 360), 10);
@@ -1048,17 +1176,17 @@ int main(int argc, char **argv) {
                       QPoint(530, 420));
   application.processEvents();
   if (editor.cursor().shape() != Qt::CrossCursor ||
-      QImage(snapshotPath) == beforeFreehandSnapshot)
+      flushedSnapshot(editor, snapshotPath) == beforeFreehandSnapshot)
     return 28;
-  const QImage beforeMarkerSnapshot(snapshotPath);
+  const QImage beforeMarkerSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_2);
   QTest::keyClick(&editor, Qt::Key_C);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(470, 300));
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor ||
-      QImage(snapshotPath) == beforeMarkerSnapshot)
+      flushedSnapshot(editor, snapshotPath) == beforeMarkerSnapshot)
     return 48;
-  const QImage beforeTextSnapshot(snapshotPath);
+  const QImage beforeTextSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_T);
   // Text size panel under the Text toolbar button (shifted by Highlighter).
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(341, 133));
@@ -1080,42 +1208,42 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-text-committed.png"),
                           "PNG") ||
-      QImage(snapshotPath) == beforeTextSnapshot)
+      flushedSnapshot(editor, snapshotPath) == beforeTextSnapshot)
     return 20;
-  const QImage beforeMoveSnapshot(snapshotPath);
+  const QImage beforeMoveSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_V);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 300));
   QTest::mouseMove(&editor, QPoint(420, 315), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(420, 315));
   application.processEvents();
-  const QImage movedSnapshot(snapshotPath);
+  const QImage movedSnapshot = flushedSnapshot(editor, snapshotPath);
   if (movedSnapshot.isNull() || movedSnapshot == beforeMoveSnapshot)
     return 49;
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != beforeMoveSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != beforeMoveSnapshot)
     return 50;
   QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != movedSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != movedSnapshot)
     return 51;
-  const QImage beforeEndpointSnapshot(snapshotPath);
+  const QImage beforeEndpointSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(590, 365));
   QTest::mouseMove(&editor, QPoint(620, 380), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(620, 380));
   application.processEvents();
-  const QImage resizedSnapshot(snapshotPath);
+  const QImage resizedSnapshot = flushedSnapshot(editor, snapshotPath);
   if (resizedSnapshot.isNull() || resizedSnapshot == beforeEndpointSnapshot)
     return 52;
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != beforeEndpointSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != beforeEndpointSnapshot)
     return 53;
   QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
   application.processEvents();
-  if (QImage(snapshotPath) != resizedSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) != resizedSnapshot)
     return 54;
   if (!editor.grab().save(outputRoot + QStringLiteral("-vector-selected.png"),
                           "PNG"))
@@ -1129,10 +1257,10 @@ int main(int argc, char **argv) {
   } else {
     return 22;
   }
-  const QImage beforeBackdropSnapshot(snapshotPath);
+  const QImage beforeBackdropSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_B);
   application.processEvents();
-  if (QImage(snapshotPath) == beforeBackdropSnapshot)
+  if (flushedSnapshot(editor, snapshotPath) == beforeBackdropSnapshot)
     return 55;
   // Palette toolbar button (index 8 after Highlighter was inserted).
   QTest::mouseMove(&editor, QPoint(398, 92), 20);
@@ -1163,7 +1291,7 @@ int main(int argc, char **argv) {
     QTest::mouseMove(&redactionEditor, QPoint(650, 470), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(650, 470));
-    const QImage beforeRedaction(snapshotPath);
+    const QImage beforeRedaction = flushedSnapshot(redactionEditor, snapshotPath);
     QTest::keyClick(&redactionEditor, Qt::Key_D);
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(300, 200));
@@ -1171,7 +1299,7 @@ int main(int argc, char **argv) {
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(420, 200));
     application.processEvents();
-    if (QImage(snapshotPath) != beforeRedaction)
+    if (flushedSnapshot(redactionEditor, snapshotPath) != beforeRedaction)
       return 72;
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(300, 200));
@@ -1179,7 +1307,7 @@ int main(int argc, char **argv) {
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(420, 260));
     application.processEvents();
-    const QImage pixelatedRedaction(snapshotPath);
+    const QImage pixelatedRedaction = flushedSnapshot(redactionEditor, snapshotPath);
     if (pixelatedRedaction.isNull() || pixelatedRedaction == beforeRedaction)
       return 73;
 
@@ -1188,16 +1316,16 @@ int main(int argc, char **argv) {
                       QPoint(360, 230));
     QTest::keyClick(&redactionEditor, Qt::Key_D);
     application.processEvents();
-    const QImage solidRedaction(snapshotPath);
+    const QImage solidRedaction = flushedSnapshot(redactionEditor, snapshotPath);
     if (solidRedaction.isNull() || solidRedaction == pixelatedRedaction)
       return 74;
     QTest::keyClick(&redactionEditor, Qt::Key_Z, Qt::ControlModifier);
     application.processEvents();
-    if (QImage(snapshotPath) != pixelatedRedaction)
+    if (flushedSnapshot(redactionEditor, snapshotPath) != pixelatedRedaction)
       return 75;
     QTest::keyClick(&redactionEditor, Qt::Key_Y, Qt::ControlModifier);
     application.processEvents();
-    if (QImage(snapshotPath) != solidRedaction)
+    if (flushedSnapshot(redactionEditor, snapshotPath) != solidRedaction)
       return 76;
 
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
@@ -1206,12 +1334,12 @@ int main(int argc, char **argv) {
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(380, 245));
     application.processEvents();
-    const QImage movedRedaction(snapshotPath);
+    const QImage movedRedaction = flushedSnapshot(redactionEditor, snapshotPath);
     if (movedRedaction.isNull() || movedRedaction == solidRedaction)
       return 77;
     QTest::keyClick(&redactionEditor, Qt::Key_Z, Qt::ControlModifier);
     application.processEvents();
-    if (QImage(snapshotPath) != solidRedaction)
+    if (flushedSnapshot(redactionEditor, snapshotPath) != solidRedaction)
       return 78;
 
     QTest::keyClick(&redactionEditor, Qt::Key_D);
@@ -1221,7 +1349,7 @@ int main(int argc, char **argv) {
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(280, 190));
     application.processEvents();
-    if (QImage(snapshotPath) == solidRedaction ||
+    if (flushedSnapshot(redactionEditor, snapshotPath) == solidRedaction ||
         !redactionEditor.grab().save(
             outputRoot + QStringLiteral("-secure-redaction.png"), "PNG"))
       return 79;
@@ -1231,7 +1359,7 @@ int main(int argc, char **argv) {
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(420, 190));
     application.processEvents();
-    if (QImage(snapshotPath) == beforeRedaction)
+    if (flushedSnapshot(redactionEditor, snapshotPath) == beforeRedaction)
       return 81;
   }
 
@@ -1614,7 +1742,9 @@ int main(int argc, char **argv) {
     QTest::mouseClick(&finishEditor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(470, 300));
     application.processEvents();
-    const QImage snapshotBeforeSave(snapshotPath);
+    const QImage snapshotBeforeSave =
+        flushedSnapshot(finishEditor, snapshotPath)
+            .convertToFormat(QImage::Format_ARGB32);
     if (snapshotBeforeSave.isNull())
       return 59;
     QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
@@ -1626,7 +1756,9 @@ int main(int argc, char **argv) {
       return 60;
     savedPath = QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
                     .filePath(savedFiles.constFirst());
-    if (QImage(savedPath) != snapshotBeforeSave || QFile::exists(snapshotPath))
+    if (QImage(savedPath).convertToFormat(QImage::Format_ARGB32) !=
+            snapshotBeforeSave ||
+        QFile::exists(snapshotPath))
       return 61;
   }
   if (!QFile::exists(savedPath))
