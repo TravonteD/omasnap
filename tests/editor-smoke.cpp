@@ -741,6 +741,256 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
   return true;
 }
 
+bool showsSecretRed(const QColor &color) {
+  return color.red() > 180 && color.green() < 70 && color.blue() < 70;
+}
+
+/** Redaction sits under every other tool in both preview and export. */
+bool runAnnotationLayerChecks(QApplication &application, QString &error) {
+  const QColor solid(QStringLiteral("#121216"));
+  const QColor secret(QStringLiteral("#ff0000"));
+  const QColor backdrop(QStringLiteral("#182030"));
+
+  if (annotationLayer(Annotation::Kind::Redaction) !=
+          AnnotationLayer::Redaction ||
+      annotationLayer(Annotation::Kind::Arrow) != AnnotationLayer::Default ||
+      annotationLayer(Annotation::Kind::Spotlight) !=
+          AnnotationLayer::Default ||
+      annotationLayer(Annotation::Kind::Text) != AnnotationLayer::Default) {
+    error = QStringLiteral("Annotation kinds did not map onto two layers");
+    return false;
+  }
+
+  // Selection-relative redactions must stay put when the crop is not at the
+  // origin. The old applyRedactionsScaled offset subtracted selection.topLeft()
+  // and slid the block off the secret.
+  QImage scaledBase(100, 80, QImage::Format_ARGB32_Premultiplied);
+  scaledBase.fill(secret);
+  Annotation scaledRedaction;
+  scaledRedaction.kind = Annotation::Kind::Redaction;
+  scaledRedaction.start = {10, 10};
+  scaledRedaction.end = {40, 40};
+  scaledRedaction.redactionStyle = RedactionStyle::Solid;
+  const QImage scaled = applyRedactionsScaled(
+      scaledBase, {scaledRedaction}, QRectF(200, 150, 100, 80), QSizeF(100, 80));
+  if (scaled.pixelColor(20, 20) != solid ||
+      scaled.pixelColor(2, 2) != secret) {
+    error = QStringLiteral(
+        "Scaled redaction layer used capture coordinates instead of "
+        "selection-relative ones");
+    return false;
+  }
+
+  CaptureData capture;
+  capture.monitor.scale = 1.0;
+  capture.monitor.pixelSize = {80, 40};
+  capture.source = QImage(80, 40, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(backdrop);
+  for (int y = 10; y < 30; ++y) {
+    for (int x = 20; x < 40; ++x)
+      capture.source.setPixelColor(x, y, secret);
+  }
+  capture.preview = capture.source;
+
+  Annotation redaction;
+  redaction.kind = Annotation::Kind::Redaction;
+  redaction.start = {20, 10};
+  redaction.end = {40, 30};
+  redaction.redactionStyle = RedactionStyle::Solid;
+
+  Annotation lens;
+  lens.kind = Annotation::Kind::Spotlight;
+  lens.start = {16, 6};
+  lens.end = {44, 34};
+  lens.magnification = 2.0;
+  lens.color = Qt::white;
+  lens.size = 2;
+
+  const QImage spotlightExport =
+      renderCapture(capture, QRectF(0, 0, 80, 40), {redaction, lens},
+                    BackgroundStyle::None);
+  if (spotlightExport.isNull() ||
+      showsSecretRed(spotlightExport.pixelColor(30, 20)) ||
+      spotlightExport.pixelColor(30, 20) != solid) {
+    error = QStringLiteral("Export spotlight sampled un-redacted source pixels");
+    return false;
+  }
+
+  Annotation arrow;
+  arrow.kind = Annotation::Kind::Arrow;
+  arrow.start = {22, 20};
+  arrow.end = {38, 20};
+  arrow.color = QColor(QStringLiteral("#0a84ff"));
+  arrow.size = 4;
+  Annotation label;
+  label.kind = Annotation::Kind::Text;
+  label.start = {24, 26};
+  label.text = QStringLiteral("X");
+  label.color = Qt::white;
+  label.size = 8;
+  const QImage redactionOnly =
+      renderCapture(capture, QRectF(0, 0, 80, 40), {redaction},
+                    BackgroundStyle::None);
+  const QImage overlayExport =
+      renderCapture(capture, QRectF(0, 0, 80, 40), {redaction, arrow, label},
+                    BackgroundStyle::None);
+  const QColor overlayFill = overlayExport.pixelColor(22, 12);
+  const QColor overlayStroke = overlayExport.pixelColor(26, 20);
+  if (overlayExport.isNull() || redactionOnly.isNull() ||
+      redactionOnly.pixelColor(22, 12) != solid || showsSecretRed(overlayFill) ||
+      overlayStroke.blue() <= overlayStroke.red() + 20) {
+    error = QStringLiteral(
+        "Export did not keep redaction under arrow and text");
+    return false;
+  }
+
+  CaptureData editorCapture;
+  editorCapture.monitor.name = QStringLiteral("TEST");
+  editorCapture.monitor.geometry = {0, 0, 800, 600};
+  editorCapture.monitor.pixelSize = {800, 600};
+  editorCapture.monitor.scale = 1.0;
+  editorCapture.source =
+      QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  editorCapture.source.fill(backdrop);
+  {
+    QPainter painter(&editorCapture.source);
+    painter.fillRect(QRect(200, 200, 100, 60), secret);
+  }
+  editorCapture.preview = editorCapture.source;
+
+  // Fullscreen draws the 800x600 capture at 84,68 scaled by 0.79. The secret
+  // then covers 242,226 to 321,273, centered on 281,250. A loupe smaller than
+  // the redaction can only show redacted pixels if it samples the redaction
+  // layer.
+  const auto spotlightPreviewColor = [&](bool redact) {
+    CaptureEditor editor(editorCapture, CaptureEditor::CaptureMode::Fullscreen);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+    if (redact) {
+      QTest::keyClick(&editor, Qt::Key_D);
+      QTest::keyClick(&editor, Qt::Key_D);
+      QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(230, 214));
+      QTest::mouseMove(&editor, QPoint(333, 285), 20);
+      QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(333, 285));
+      application.processEvents();
+    }
+    QTest::keyClick(&editor, Qt::Key_S);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(251, 230));
+    QTest::mouseMove(&editor, QPoint(311, 270), 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(311, 270));
+    application.processEvents();
+    const QColor color = editor.grab().toImage().pixelColor(QPoint(281, 250));
+    editor.close();
+    return color;
+  };
+  if (!showsSecretRed(spotlightPreviewColor(false))) {
+    error = QStringLiteral("Spotlight preview did not magnify the capture");
+    return false;
+  }
+  if (showsSecretRed(spotlightPreviewColor(true))) {
+    error = QStringLiteral("Spotlight preview magnified un-redacted pixels");
+    return false;
+  }
+
+  {
+    CaptureEditor editor(editorCapture, CaptureEditor::CaptureMode::Fullscreen);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+    QTest::keyClick(&editor, Qt::Key_D);
+    QTest::keyClick(&editor, Qt::Key_D);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 214));
+    QTest::mouseMove(&editor, QPoint(333, 285), 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(333, 285));
+    QTest::keyClick(&editor, Qt::Key_5);
+    QTest::keyClick(&editor, Qt::Key_A);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 250));
+    QTest::mouseMove(&editor, QPoint(312, 250), 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(312, 250));
+    application.processEvents();
+    const QImage preview = editor.grab().toImage();
+    const QImage exported = editor.renderCurrentOutput();
+    editor.close();
+    const QColor arrowColor(QStringLiteral("#0a84ff"));
+    if (preview.pixelColor(250, 226) != solid ||
+        showsSecretRed(preview.pixelColor(250, 226)) ||
+        preview.pixelColor(260, 250) != arrowColor) {
+      error = QStringLiteral("Preview did not keep redaction under the arrow");
+      return false;
+    }
+    if (exported.pixelColor(210, 202) != solid ||
+        showsSecretRed(exported.pixelColor(210, 202)) ||
+        exported.pixelColor(220, 230) != arrowColor) {
+      error = QStringLiteral("Export did not keep redaction under the arrow");
+      return false;
+    }
+  }
+
+  {
+    CaptureData offsetCapture = editorCapture;
+    {
+      QPainter painter(&offsetCapture.source);
+      painter.fillRect(QRect(450, 350, 80, 60), secret);
+    }
+    offsetCapture.preview = offsetCapture.source;
+    CaptureEditor editor(offsetCapture);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+
+    // Region 200,150 400x300 draws at 200,155 with edit scale 1. The secret
+    // is then at 450,355 to 530,415. A preview that subtracts the selection
+    // origin lands the block around 250,205 instead.
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 150));
+    QTest::mouseMove(&editor, QPoint(600, 450), 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(600, 450));
+    application.processEvents();
+    const QPoint secretCenter(490, 385);
+    const QPoint displacedCenter(250, 205);
+    if (!showsSecretRed(editor.grab().toImage().pixelColor(secretCenter))) {
+      error = QStringLiteral("Editor did not show the secret before redacting");
+      return false;
+    }
+
+    QTest::keyClick(&editor, Qt::Key_D);
+    QTest::keyClick(&editor, Qt::Key_D);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(450, 355));
+    QTest::mouseMove(&editor, QPoint(530, 415), 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(530, 415));
+    application.processEvents();
+    const QImage preview = editor.grab().toImage();
+    const QImage exported = editor.renderCurrentOutput();
+    editor.close();
+    if (showsSecretRed(preview.pixelColor(secretCenter)) ||
+        preview.pixelColor(secretCenter) != solid) {
+      error = QStringLiteral("Redaction preview left the secret visible");
+      return false;
+    }
+    if (preview.pixelColor(displacedCenter) == solid) {
+      error = QStringLiteral(
+          "Redaction preview drew the block at the selection offset");
+      return false;
+    }
+    if (exported.size() != QSize(400, 300) ||
+        exported.pixelColor(290, 230) != solid ||
+        showsSecretRed(exported.pixelColor(290, 230)) ||
+        exported.pixelColor(10, 10) != backdrop) {
+      error = QStringLiteral(
+          "Export redaction did not stay on the off-origin secret");
+      return false;
+    }
+  }
+  return true;
+}
+
 bool runContinuousAnnotationToolsSmoke(QApplication &application,
                                        QString &error) {
   CaptureData capture;
@@ -1174,6 +1424,10 @@ int main(int argc, char **argv) {
   if (!runTextClickAwayCommitCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 87;
+  }
+  if (!runAnnotationLayerChecks(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 86;
   }
   if (!runContinuousAnnotationToolsSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;

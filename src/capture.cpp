@@ -636,6 +636,15 @@ void paintSpotlights(QPainter &painter, const QImage &source,
   painter.restore();
 }
 
+void paintDefaultLayer(QPainter &painter, const QImage &redacted,
+                       const QRectF &logicalBounds,
+                       const QVector<Annotation> &annotations) {
+  paintSpotlights(painter, redacted, logicalBounds, QRectF(redacted.rect()),
+                  annotations);
+  for (const Annotation &annotation : annotations)
+    paintAnnotation(painter, annotation);
+}
+
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle) {
   if (backgroundStyle == BackgroundStyle::None)
@@ -879,10 +888,8 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   painter.translate(marginX, marginY);
   painter.scale(scaleX, scaleY);
   painter.setClipRect(QRectF(QPointF(), selection.size()));
-  paintSpotlights(painter, cropped, QRectF(QPointF(), selection.size()),
-                  QRectF(cropped.rect()), annotations);
-  for (const Annotation &annotation : annotations)
-    drawAnnotation(painter, annotation);
+  paintDefaultLayer(painter, cropped, QRectF(QPointF(), selection.size()),
+                    annotations);
   painter.restore();
   painter.end();
   return output;
@@ -908,9 +915,9 @@ QImage applyRedactionsScaled(QImage image, const QVector<Annotation> &redactions
     return image;
   const qreal scaleX = targetSize.width() / selection.width();
   const qreal scaleY = targetSize.height() / selection.height();
-  applyRedactions(image, redactions, scaleX, scaleY,
-                  QPointF(-selection.left() * scaleX,
-                          -selection.top() * scaleY));
+  // The image already starts at the selection origin and redactions are
+  // selection-relative, so scaling alone maps them onto the layer.
+  applyRedactions(image, redactions, scaleX, scaleY);
   return image;
 }
 

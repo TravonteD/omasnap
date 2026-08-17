@@ -2383,11 +2383,36 @@ void CaptureEditor::paintEdit(QPainter &painter) {
 
   QPainterPath clip;
   clip.addRoundedRect(image, hasBackground ? 10 : 0, hasBackground ? 10 : 0);
-  QVector<Annotation> redactions;
-  for (const Annotation &annotation : annotations_) {
-    if (annotation.kind == Annotation::Kind::Redaction)
-      redactions.push_back(annotation);
+  const QSize targetSize(qRound(image.width() * devicePixelRatioF()),
+                         qRound(image.height() * devicePixelRatioF()));
+  // Cache the un-annotated selection at display resolution. Rebuilding it
+  // from the native source every pointer move would stall large captures.
+  if (redactionBaseStale_ || redactionBaseSize_ != targetSize ||
+      cachedRedactionSelection_ != selection_) {
+    redactionBase_ = renderSelectionBase(capture_, selection_, targetSize);
+    redactionBaseSize_ = targetSize;
+    cachedRedactionSelection_ = selection_;
+    redactionLayerCache_ = {};
+    cachedCommittedRedactions_.clear();
+    redactionBaseStale_ = false;
   }
+
+  QVector<Annotation> committedRedactions;
+  for (const Annotation &annotation : annotations_) {
+    if (annotationLayer(annotation.kind) == AnnotationLayer::Redaction)
+      committedRedactions.push_back(annotation);
+  }
+  if (redactionLayerCache_.isNull() ||
+      cachedCommittedRedactions_ != committedRedactions) {
+    cachedCommittedRedactions_ = committedRedactions;
+    redactionLayerCache_ =
+        committedRedactions.isEmpty()
+            ? redactionBase_
+            : applyRedactionsScaled(redactionBase_, committedRedactions,
+                                    selection_, QSizeF(targetSize));
+  }
+
+  QImage redactionLayer = redactionLayerCache_;
   if (dragging_ && tool_ == Tool::Redact) {
     Annotation preview;
     preview.kind = Annotation::Kind::Redaction;
@@ -2395,34 +2420,16 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     preview.end = toAnnotationPoint(cursor_);
     preview.redactionStyle = redactionStyle_;
     preview.redactionSeed = activeRedactionSeed_;
-    redactions.push_back(std::move(preview));
+    redactionLayer = applyRedactionsScaled(redactionLayerCache_, {preview},
+                                           selection_, QSizeF(targetSize));
   }
+
   painter.save();
   painter.setClipPath(clip);
-  if (redactions.isEmpty()) {
+  if (!redactionLayer.isNull())
+    painter.drawImage(image, redactionLayer);
+  else
     painter.drawImage(image, capture_.source, sourceRect(selection_));
-  } else {
-    // Redact against a cached display-resolution base: rebuilding it from the
-    // native source every drag frame would stall the overlay on large
-    // captures. Only the redaction blocks change while dragging.
-    const QSize targetSize(qRound(image.width() * devicePixelRatioF()),
-                           qRound(image.height() * devicePixelRatioF()));
-    if (redactionBaseStale_ || redactionBaseSize_ != targetSize ||
-        cachedRedactionSelection_ != selection_) {
-      redactionBase_ = renderSelectionBase(capture_, selection_, targetSize);
-      redactionBaseSize_ = targetSize;
-      cachedRedactionSelection_ = selection_;
-      redactionPreviewCache_ = {};
-      redactionBaseStale_ = false;
-    }
-    if (redactionPreviewCache_.isNull() ||
-        cachedPreviewRedactions_ != redactions) {
-      cachedPreviewRedactions_ = redactions;
-      redactionPreviewCache_ = applyRedactionsScaled(
-          redactionBase_, redactions, selection_, QSizeF(targetSize));
-    }
-    painter.drawImage(image, redactionPreviewCache_);
-  }
   painter.restore();
 
   painter.save();
@@ -2430,27 +2437,14 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   painter.scale(editScale(), editScale());
   painter.save();
   painter.setClipRect(QRectF(QPointF(), selection_.size()));
-  QVector<Annotation> liveAnnotations = annotations_;
-  if (dragging_ && tool_ == Tool::Spotlight) {
-    Annotation preview;
-    preview.kind = Annotation::Kind::Spotlight;
-    preview.start = dragStart_;
-    const QPointF end = toAnnotationPoint(cursor_);
-    preview.end = creationConstraintActive_
-                      ? constrainedCreationEndpoint(tool_, dragStart_, end)
-                      : end;
-    preview.magnification = spotlightMagnification_;
-    preview.spotlightShape = spotlightShape_;
-    preview.color = annotationColor();
-    preview.size = annotationSize_;
-    liveAnnotations.push_back(std::move(preview));
-  }
-  paintSpotlights(painter, capture_.source, QRectF(QPointF(), selection_.size()),
-                  sourceRect(selection_), liveAnnotations);
+  QVector<Annotation> defaultAnnotations;
+  defaultAnnotations.reserve(annotations_.size() + 1);
   for (int index = 0; index < annotations_.size(); ++index) {
-    if (index != editingAnnotation_ &&
-        annotations_.at(index).kind != Annotation::Kind::Redaction)
-      paintAnnotation(painter, annotations_.at(index));
+    if (index == editingAnnotation_)
+      continue;
+    if (annotationLayer(annotations_.at(index).kind) ==
+        AnnotationLayer::Default)
+      defaultAnnotations.push_back(annotations_.at(index));
   }
   if (dragging_ && tool_ != Tool::Select && tool_ != Tool::Redact) {
     Annotation preview;
@@ -2480,7 +2474,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     }
     preview.color = tool_ == Tool::Ocr ? QColor(Qt::white) : annotationColor();
     preview.size = tool_ == Tool::Ocr ? 2.0 : annotationSize_;
-    paintAnnotation(painter, preview);
+    defaultAnnotations.push_back(std::move(preview));
   } else if (tool_ == Tool::Marker && image.contains(cursor_)) {
     Annotation preview;
     preview.kind = Annotation::Kind::Marker;
@@ -2489,7 +2483,16 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     preview.color = annotationColor();
     preview.color.setAlpha(185);
     preview.size = annotationSize_;
-    paintAnnotation(painter, preview);
+    defaultAnnotations.push_back(std::move(preview));
+  }
+  // Default-layer tools (including spotlight) sample the redaction layer,
+  // never the raw capture. The layer image is already the selection crop.
+  if (!redactionLayer.isNull()) {
+    paintDefaultLayer(painter, redactionLayer,
+                      QRectF(QPointF(), selection_.size()), defaultAnnotations);
+  } else {
+    for (const Annotation &annotation : defaultAnnotations)
+      paintAnnotation(painter, annotation);
   }
   painter.restore();
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&

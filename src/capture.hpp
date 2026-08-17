@@ -70,6 +70,13 @@ struct Annotation {
   bool operator==(const Annotation &) const = default;
 };
 
+enum class AnnotationLayer { Redaction, Default };
+
+[[nodiscard]] constexpr AnnotationLayer annotationLayer(Annotation::Kind kind) {
+  return kind == Annotation::Kind::Redaction ? AnnotationLayer::Redaction
+                                             : AnnotationLayer::Default;
+}
+
 [[nodiscard]] bool loadCaptureFonts();
 [[nodiscard]] QFont annotationTextFont(qreal size);
 /**
@@ -108,10 +115,18 @@ void paintAnnotation(QPainter &painter, const Annotation &annotation);
 void paintSpotlights(QPainter &painter, const QImage &source,
                      const QRectF &targetBounds, const QRectF &sourceRect,
                      const QVector<Annotation> &annotations);
+/**
+ * Paints the default annotation layer (spotlights, then vectors) in selection
+ * space. Spotlights sample `redacted`, which must already include the
+ * redaction layer so a loupe cannot magnify source pixels.
+ */
+void paintDefaultLayer(QPainter &painter, const QImage &redacted,
+                       const QRectF &logicalBounds,
+                       const QVector<Annotation> &annotations);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle);
 /**
- * Renders the selection region at `targetSize` for redaction previews. The
+ * Renders the selection region at `targetSize` for the redaction layer. The
  * result carries no annotations; callers overlay redactions with
  * applyRedactionsScaled and cache it while the selection is unchanged.
  */
@@ -121,7 +136,7 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
 /**
  * Paints redaction annotations over a display-resolution selection image. The
  * source image MUST be the exact selection region scaled to `targetSize`;
- * annotations live in the same logical coordinate space as `selection`.
+ * annotations are selection-relative, spanning 0..`selection` size.
  */
 QImage applyRedactionsScaled(QImage image, const QVector<Annotation> &redactions,
                              const QRectF &selection, const QSizeF &targetSize);

@@ -203,8 +203,10 @@ private:
   RedactionStyle redactionStyle_ = RedactionStyle::Pixelate;
   quint32 activeRedactionSeed_ = 0;
   QRectF cachedRedactionSelection_;
-  QVector<Annotation> cachedPreviewRedactions_;
-  QImage redactionPreviewCache_;
+  QVector<Annotation> cachedCommittedRedactions_;
+  // Committed redaction layer at display resolution. Live drag paints the
+  // in-progress rect on a copy so committed blocks are not rebuilt per move.
+  QImage redactionLayerCache_;
   // Display-resolution selection image reused across redaction drag frames.
   QImage redactionBase_;
   QSize redactionBaseSize_;
