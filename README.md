@@ -239,7 +239,7 @@ Install the corresponding Tesseract language data before adding a language to
 
 | Input | Action |
 |---|---|
-| `V` | Select/move/resize layers; wheel scales the selected layer |
+| `V` | Select/move/resize layers; drag empty canvas for a marquee; wheel scales the selected layer |
 | `A` | Arrow |
 | `S` | Spotlight/loupe; press again to cycle ellipse, rectangle, rounded |
 | `L` | Straight line |

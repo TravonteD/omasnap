@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QLineEdit>
+#include <QPixmap>
 #include <QWidget>
 
 class QKeyEvent;
@@ -164,6 +165,7 @@ private:
   void handleToolbar(const QString &action);
   void paintEdit(QPainter &painter);
   void paintSelect(QPainter &painter);
+  void refreshBackdropCache();
   void runOcr(const QRectF &localSelection = {});
   void setStatus(QString status);
   void scaleSelectedAnnotation(qreal factor);
@@ -211,6 +213,12 @@ private:
   QImage redactionBase_;
   QSize redactionBaseSize_;
   bool redactionBaseStale_ = true;
+  // Select-phase capture scaled once per source, widget size, and DPR.
+  QPixmap backdrop_;
+  QPixmap dimmedBackdrop_;
+  QSize backdropSize_;
+  qreal backdropRatio_ = 0.0;
+  qint64 backdropKey_ = 0;
   // Background/gui-thread snapshot persistence with latest-wins coalescing.
   QFutureWatcher<bool> snapshotWatcher_;
   bool snapshotBusy_ = false;

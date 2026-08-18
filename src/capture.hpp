@@ -31,7 +31,8 @@ struct WindowTarget {
 struct CaptureData {
   MonitorInfo monitor;
   QImage source;
-  QImage preview;
+  /** Logical size the native source image is presented at. */
+  QSize previewSize;
   QVector<WindowTarget> windows;
 };
 

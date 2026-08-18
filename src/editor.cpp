@@ -41,6 +41,7 @@ constexpr std::array<qreal, 3> kTextSizes{2.0, 5.0, 9.0};
 constexpr std::array<const char *, 3> kTextSizeNames{"S", "M", "L"};
 constexpr qreal kToolbarWidth = 760;
 constexpr qreal kMinimumRedactionExtent = 5.0;
+constexpr int kBackdropDim = 143;
 
 qreal toolbarScale(qreal availableWidth) {
   constexpr qreal sideMargins = 16.0;
@@ -318,7 +319,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
             redactionBaseStale_ = true;
             switch (pendingMode_) {
             case CaptureMode::Fullscreen:
-              selection_ = QRectF(QPointF(), capture_.preview.size());
+              selection_ = QRectF(QPointF(), capture_.previewSize);
               enterEdit(QStringLiteral(
                   "Full screen selected · native resolution · outer handles "
                   "crop"));
@@ -352,9 +353,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
       return;
     }
     capture_.source = job.image;
-    capture_.preview =
-        job.image.scaled(job.scaledSize, Qt::IgnoreAspectRatio,
-                         Qt::SmoothTransformation);
+    capture_.previewSize = job.scaledSize;
     selection_ = QRectF(QPointF(), job.scaledSize);
     redactionBaseStale_ = true;
     windowMode_ = false;
@@ -392,7 +391,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     pendingMode_ = mode;
     setStatus(QStringLiteral("Capturing screen…"));
   } else if (mode == CaptureMode::Fullscreen || mode == CaptureMode::File) {
-    selection_ = QRectF(QPointF(), capture_.preview.size());
+    selection_ = QRectF(QPointF(), capture_.previewSize);
     enterEdit(
         mode == CaptureMode::File
             ? QStringLiteral("Editing image from file · Copy/Save to output")
@@ -758,13 +757,12 @@ QPointF CaptureEditor::toAnnotationPoint(const QPointF &position) const {
 }
 
 QRectF CaptureEditor::sourceRect(const QRectF &logicalRect) const {
-  if (capture_.preview.isNull() || capture_.source.isNull() ||
-      capture_.preview.width() <= 0 || capture_.preview.height() <= 0)
+  if (capture_.source.isNull() || capture_.previewSize.isEmpty())
     return {};
   const qreal scaleX =
-      capture_.source.width() / static_cast<qreal>(capture_.preview.width());
+      capture_.source.width() / static_cast<qreal>(capture_.previewSize.width());
   const qreal scaleY =
-      capture_.source.height() / static_cast<qreal>(capture_.preview.height());
+      capture_.source.height() / static_cast<qreal>(capture_.previewSize.height());
   return {logicalRect.x() * scaleX, logicalRect.y() * scaleY,
           logicalRect.width() * scaleX, logicalRect.height() * scaleY};
 }
@@ -1444,7 +1442,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       windowMode_ = false;
       dragging_ = false;
       hoveredWindow_ = -1;
-      selection_ = QRectF(QPointF(), capture_.preview.size());
+      selection_ = QRectF(QPointF(), capture_.previewSize);
       enterEdit(QStringLiteral(
           "Full screen selected · native resolution · outer handles crop"));
       update();
@@ -1630,7 +1628,7 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
         return;
       const int handle = static_cast<int>(interaction_) -
                          static_cast<int>(Interaction::CropTopLeft);
-      const QSizeF previewSize = capture_.preview.size();
+      const QSizeF previewSize = capture_.previewSize;
       if (previewSize.width() <= 0.0 || previewSize.height() <= 0.0)
         return;
       const qreal sourceX = originalSelection_.left() +
@@ -1904,7 +1902,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
 
   const QPointF point = toAnnotationPoint(cursor_);
   if (tool_ == Tool::Eyedropper) {
-    customColor_ = sampleSourceColor(capture_.source, capture_.preview.size(),
+    customColor_ = sampleSourceColor(capture_.source, capture_.previewSize,
                                      selection_, editImageRect(), cursor_);
     usingCustomColor_ = true;
     if (customColor_.hsvHueF() >= 0)
@@ -2299,19 +2297,56 @@ void CaptureEditor::updatePointerCursor() {
     setCursor(Qt::CrossCursor);
 }
 
+void CaptureEditor::refreshBackdropCache() {
+  const qreal ratio = devicePixelRatioF();
+  const QSize deviceSize = (QSizeF(size()) * ratio).toSize();
+  const qint64 sourceKey = capture_.source.cacheKey();
+  if (deviceSize.isEmpty()) {
+    backdrop_ = {};
+    dimmedBackdrop_ = {};
+    backdropSize_ = {};
+    return;
+  }
+  if (!backdrop_.isNull() && backdropSize_ == deviceSize &&
+      backdropKey_ == sourceKey && qFuzzyCompare(backdropRatio_, ratio))
+    return;
+
+  backdropSize_ = deviceSize;
+  backdropRatio_ = ratio;
+  backdropKey_ = sourceKey;
+  backdrop_ = QPixmap(deviceSize);
+  backdrop_.setDevicePixelRatio(ratio);
+  backdrop_.fill(Qt::transparent);
+  {
+    QPainter cache(&backdrop_);
+    cache.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    cache.drawImage(QRectF(QPointF(), QSizeF(deviceSize) / ratio),
+                    capture_.source);
+  }
+  dimmedBackdrop_ = backdrop_.copy();
+  {
+    QPainter cache(&dimmedBackdrop_);
+    cache.fillRect(QRectF(QPointF(), QSizeF(deviceSize) / ratio),
+                   QColor(0, 0, 0, kBackdropDim));
+  }
+}
+
 void CaptureEditor::paintSelect(QPainter &painter) {
   if (capture_.source.isNull()) {
-    painter.fillRect(rect(), QColor(0, 0, 0, 143));
+    painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
     drawStatusPill(painter, rect(), status_);
     return;
   }
-  painter.drawImage(rect(), capture_.source);
-  painter.fillRect(rect(), QColor(0, 0, 0, 143));
+  refreshBackdropCache();
+  painter.drawPixmap(rect(), dimmedBackdrop_);
 
   if (windowMode_) {
     if (hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()) {
       const QRect window = capture_.windows.at(hoveredWindow_).rect;
-      painter.drawImage(window, capture_.source, sourceRect(window));
+      painter.save();
+      painter.setClipRect(window);
+      painter.drawPixmap(rect(), backdrop_);
+      painter.restore();
     }
     for (int index = 0; index < capture_.windows.size(); ++index) {
       const WindowTarget &window = capture_.windows.at(index);
@@ -2321,7 +2356,10 @@ void CaptureEditor::paintSelect(QPainter &painter) {
       painter.drawRect(window.rect);
     }
   } else if (!selection_.isEmpty()) {
-    painter.drawImage(selection_, capture_.source, sourceRect(selection_));
+    painter.save();
+    painter.setClipRect(selection_);
+    painter.drawPixmap(rect(), backdrop_);
+    painter.restore();
     painter.setPen(QPen(Qt::white, 2));
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(selection_);
@@ -2430,6 +2468,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     painter.drawImage(image, redactionLayer);
   else
     painter.drawImage(image, capture_.source, sourceRect(selection_));
+
   painter.restore();
 
   painter.save();
@@ -2495,6 +2534,15 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       paintAnnotation(painter, annotation);
   }
   painter.restore();
+  if (tool_ == Tool::Select && marqueeSelecting_ &&
+      !marqueeRect_.isEmpty()) {
+    const qreal scale = std::max<qreal>(editScale(), 0.01);
+    painter.setPen(
+        QPen(QColor(QStringLiteral("#0a84ff")), 2.0 / scale));
+    painter.setBrush(QColor(10, 132, 255, 38));
+    painter.drawRect(marqueeRect_.normalized());
+  }
+
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
       selectedAnnotation_ != editingAnnotation_) {
     const qreal scale = std::max<qreal>(editScale(), 0.01);
