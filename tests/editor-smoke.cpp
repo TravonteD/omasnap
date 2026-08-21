@@ -2200,8 +2200,9 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
     return false;
   }
   QTest::keyClick(&editor, Qt::Key_V);
-  // Press the top edge, clear of the corner handles, so this is a move.
-  drag(QPoint(575, 300), QPoint(675, 300));
+  // Press the top edge, clear of the corner and mid-side handles (eight on
+  // a box), so this is a move.
+  drag(QPoint(540, 300), QPoint(640, 300));
   Annotation shifted = rectangle;
   shifted.start.rx() += 100;
   shifted.end.rx() += 100;
@@ -2227,9 +2228,9 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Its right edge is outside the canvas too (widget x 750); grabbing the
-  // layer there drags it back in.
-  drag(QPoint(750, 375), QPoint(650, 375));
+  // Its right edge is outside the canvas too (widget x 750); grab off the
+  // mid-side handle so this is a move, not a one-axis resize.
+  drag(QPoint(750, 340), QPoint(650, 340));
   if (!snapshotMatches(expected({rectangle}))) {
     error = QStringLiteral(
         "Grabbing a selected layer outside the canvas did not move it");
@@ -2464,7 +2465,7 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
       return false;
     }
   }
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 200));
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
   if (!snapshotMatches(expected({circle}))) {
@@ -2479,10 +2480,11 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
   }
 
   // Selected ellipse moves with its whole (hollow) body like other layers.
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
-  QTest::mouseMove(&editor, QPoint(320, 230), 20);
+  // Off the mid-side handle (300,200) so this is a move, not a resize.
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 200));
+  QTest::mouseMove(&editor, QPoint(270, 230), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(320, 230));
+                      QPoint(270, 230));
   application.processEvents();
   if (!snapshotMatches(
           expected({ellipseAnnotation({120, 125}, {320, 225}), circle}))) {
@@ -2739,6 +2741,10 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("R did not fill the selected rectangle");
     return false;
   }
+  // Off any handle: with eight box handles the press point may be a resize
+  // cursor even though the tool is still Select.
+  QTest::mouseMove(&editor, QPoint(160, 480));
+  application.processEvents();
   if (editor.cursor().shape() != Qt::ArrowCursor) {
     error = QStringLiteral("Toggling a selected rectangle switched tools");
     return false;
@@ -3521,6 +3527,95 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** Checks the handle set: a box offers eight, a counter four, a line two.
+ *  Side handles stretch one axis, corners take Shift for the proportions, and
+ *  a box dragged through itself comes out the other side. */
+bool runLayerHandlesSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+  const QString snapshotPath = temporarySnapshotPath();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  // 600x400 selection shown 1:1 at widget offset (100, 105).
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(700, 500), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
+  application.processEvents();
+  const auto drag = [&](const QPoint &from, const QPoint &to,
+                        Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QTest::mousePress(&editor, Qt::LeftButton, modifiers, from);
+    QTest::mouseMove(&editor, to, 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, modifiers, to);
+    application.processEvents();
+  };
+  const auto inkBounds = [](const QImage &image) {
+    QRect bounds;
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        if (image.pixelColor(x, y) != QColor(QStringLiteral("#182030")))
+          bounds = bounds.isNull() ? QRect(x, y, 1, 1)
+                                   : bounds.united(QRect(x, y, 1, 1));
+      }
+    }
+    return bounds;
+  };
+
+  // A rectangle at annotation (100,95)-(300,195).
+  QTest::keyClick(&editor, Qt::Key_R);
+  drag(QPoint(200, 200), QPoint(400, 300));
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 250));
+  application.processEvents();
+
+  // Its right edge midpoint is at widget (400,250): a side handle stretches
+  // that axis and leaves the other alone, however far the pointer wanders.
+  QTest::mouseMove(&editor, QPoint(400, 250), 10);
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::SizeHorCursor) {
+    error = QStringLiteral("A box offered no handle on its right edge");
+    return false;
+  }
+  drag(QPoint(400, 250), QPoint(460, 320));
+  {
+    const QRect after = inkBounds(flushedSnapshot(editor, snapshotPath));
+    if (std::abs(after.right() - 360) > 4) {
+      error = QStringLiteral("The right handle did not move that edge");
+      return false;
+    }
+    if (std::abs(after.top() - 95) > 4 || std::abs(after.bottom() - 195) > 4) {
+      error = QStringLiteral("A side handle changed the other axis too");
+      return false;
+    }
+  }
+
+  // Dragged through itself, the box comes out the other side rather than
+  // collapsing against the edge it crossed.
+  drag(QPoint(460, 250), QPoint(150, 250));
+  {
+    const QRect flipped = inkBounds(flushedSnapshot(editor, snapshotPath));
+    if (flipped.width() < 20) {
+      error = QStringLiteral("Dragging an edge through the shape collapsed it");
+      return false;
+    }
+    if (std::abs(flipped.right() - 100) > 6) {
+      error = QStringLiteral("The crossed edge did not become the far side");
+      return false;
+    }
+  }
+  editor.close();
+  QFile::remove(snapshotPath);
+  return true;
+}
+
 int main(int argc, char **argv) {
   // Re-executed by the instance-lock checks as the process holding the lock.
   const QString heldLockPath =
@@ -3579,6 +3674,10 @@ int main(int argc, char **argv) {
   if (!runEyedropperSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 107;
+  }
+  if (!runLayerHandlesSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 120;
   }
   if (!runAsyncCaptureRegionSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
