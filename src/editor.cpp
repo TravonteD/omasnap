@@ -821,6 +821,28 @@ QPointF CaptureEditor::sourcePoint(const QPointF &logicalPoint) const {
   return sourceRect(QRectF(logicalPoint, QSizeF())).topLeft();
 }
 
+QRectF CaptureEditor::mapWidgetToPreview(const QRectF &widgetRect) const {
+  const QSize widget = size();
+  const QSize preview = capture_.previewSize;
+  if (widget.isEmpty() || preview.isEmpty() || widget == preview)
+    return widgetRect;
+  const qreal scaleX = preview.width() / static_cast<qreal>(widget.width());
+  const qreal scaleY = preview.height() / static_cast<qreal>(widget.height());
+  return {widgetRect.x() * scaleX, widgetRect.y() * scaleY,
+          widgetRect.width() * scaleX, widgetRect.height() * scaleY};
+}
+
+QRectF CaptureEditor::mapPreviewToWidget(const QRectF &previewRect) const {
+  const QSize widget = size();
+  const QSize preview = capture_.previewSize;
+  if (widget.isEmpty() || preview.isEmpty() || widget == preview)
+    return previewRect;
+  const qreal scaleX = widget.width() / static_cast<qreal>(preview.width());
+  const qreal scaleY = widget.height() / static_cast<qreal>(preview.height());
+  return {previewRect.x() * scaleX, previewRect.y() * scaleY,
+          previewRect.width() * scaleX, previewRect.height() * scaleY};
+}
+
 QString CaptureEditor::measurementText() const {
   if (capture_.source.isNull())
     return {};
@@ -844,8 +866,10 @@ QString CaptureEditor::measurementText() const {
 }
 
 int CaptureEditor::windowAt(const QPointF &position) const {
+  const QPointF previewPoint =
+      mapWidgetToPreview(QRectF(position, QSizeF())).topLeft();
   for (int index = capture_.windows.size() - 1; index >= 0; --index) {
-    if (capture_.windows.at(index).rect.contains(position.toPoint()))
+    if (QRectF(capture_.windows.at(index).rect).contains(previewPoint))
       return index;
   }
   return -1;
@@ -856,8 +880,8 @@ int CaptureEditor::windowInDirection(int current, int key) const {
     return -1;
 
   const QPointF origin = current >= 0 && current < capture_.windows.size()
-                             ? capture_.windows.at(current).rect.center()
-                             : cursor_;
+                             ? QPointF(capture_.windows.at(current).rect.center())
+                             : mapWidgetToPreview(QRectF(cursor_, QSizeF())).topLeft();
   int best = -1;
   qreal bestScore = std::numeric_limits<qreal>::max();
   for (int index = 0; index < capture_.windows.size(); ++index) {
@@ -2416,26 +2440,30 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   refreshBackdropCache();
   painter.drawPixmap(rect(), dimmedBackdrop_);
 
+  const bool haveHole =
+      windowMode_ ? hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()
+                  : !selection_.isEmpty();
+  if (haveHole) {
+    const QRectF previewHole =
+        windowMode_ ? QRectF(capture_.windows.at(hoveredWindow_).rect)
+                    : mapWidgetToPreview(selection_);
+    const QRectF destHole =
+        windowMode_ ? mapPreviewToWidget(previewHole) : selection_;
+    painter.save();
+    painter.setClipRect(destHole, Qt::IntersectClip);
+    painter.drawImage(destHole, capture_.source, sourceRect(previewHole));
+    painter.restore();
+  }
+
   if (windowMode_) {
-    if (hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()) {
-      const QRect window = capture_.windows.at(hoveredWindow_).rect;
-      painter.save();
-      painter.setClipRect(window);
-      painter.drawPixmap(rect(), backdrop_);
-      painter.restore();
-    }
     for (int index = 0; index < capture_.windows.size(); ++index) {
       const WindowTarget &window = capture_.windows.at(index);
       painter.setPen(QPen(
           index == hoveredWindow_ ? Qt::white : QColor(255, 255, 255, 72), 2));
       painter.setBrush(Qt::NoBrush);
-      painter.drawRect(window.rect);
+      painter.drawRect(mapPreviewToWidget(QRectF(window.rect)));
     }
   } else if (!selection_.isEmpty()) {
-    painter.save();
-    painter.setClipRect(selection_);
-    painter.drawPixmap(rect(), backdrop_);
-    painter.restore();
     painter.setPen(QPen(Qt::white, 2));
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(selection_);

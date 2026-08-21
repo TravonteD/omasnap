@@ -147,6 +147,8 @@ private:
   [[nodiscard]] QPointF toAnnotationPoint(const QPointF &position) const;
   [[nodiscard]] QRectF sourceRect(const QRectF &logicalRect) const;
   [[nodiscard]] QPointF sourcePoint(const QPointF &logicalPoint) const;
+  [[nodiscard]] QRectF mapWidgetToPreview(const QRectF &widgetRect) const;
+  [[nodiscard]] QRectF mapPreviewToWidget(const QRectF &previewRect) const;
   [[nodiscard]] int windowAt(const QPointF &position) const;
   [[nodiscard]] int windowInDirection(int current, int key) const;
   [[nodiscard]] QVector<ToolbarButton> toolbarButtons() const;
