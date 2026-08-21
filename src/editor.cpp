@@ -3,6 +3,7 @@
 #include "editor.hpp"
 #include "icons.hpp"
 #include "eyedropper.hpp"
+#include "palette-config.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -35,8 +36,6 @@
 #include <numbers>
 
 namespace {
-constexpr std::array<const char *, 6> kColorNames{
-    "#ff375f", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff", "#bf5af2"};
 constexpr std::array<qreal, 3> kTextSizes{2.0, 5.0, 9.0};
 constexpr std::array<const char *, 3> kTextSizeNames{"S", "M", "L"};
 constexpr qreal kToolbarWidth = 760;
@@ -98,6 +97,8 @@ QString toolAction(CaptureEditor::Tool tool) {
     return QStringLiteral("tool-rectangle");
   case CaptureEditor::Tool::Redact:
     return QStringLiteral("tool-redact");
+  case CaptureEditor::Tool::Cut:
+    return QStringLiteral("tool-cut");
   case CaptureEditor::Tool::Text:
     return QStringLiteral("tool-text");
   case CaptureEditor::Tool::Ocr:
@@ -295,6 +296,10 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
                              QuickOutputMode quickOutput, QWidget *parent)
     : QWidget(parent), capture_(std::move(capture)),
       quickOutputMode_(quickOutput) {
+  pristineSource_ = capture_.source;
+  pristineLogicalSize_ = capture_.previewSize;
+  paletteConfig_ = loadPaletteConfig(defaultPaletteConfigPath());
+  customColor_ = paletteConfig_.custom;
   setWindowTitle(QStringLiteral("Omasnap"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
                  Qt::WindowStaysOnTopHint);
@@ -351,7 +356,12 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   connect(&snapshotWatcher_, &QFutureWatcher<bool>::finished, this, [this] {
     snapshotBusy_ = false;
     snapshotWriteOk_ = snapshotWatcher_.result();
-    if (snapshotDirty_)
+    // Don't chain a re-render while a cut drag is live: capture_ is
+    // transiently composed with liveCut_ mid-drag, and copying it here would
+    // persist a phantom cut into the crash-recovery snapshot. snapshotDirty_
+    // stays set, so the cut's own scheduleSnapshot() call on release (or
+    // cancellation) picks the committed state back up.
+    if (snapshotDirty_ && !cutDragActive_)
       startSnapshotRender();
   });
 
@@ -366,6 +376,9 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
               return;
             }
             capture_ = job.capture;
+            pristineSource_ = capture_.source;
+            pristineLogicalSize_ = capture_.previewSize;
+            cuts_.clear();
             redactionBaseStale_ = true;
             switch (pendingMode_) {
             case CaptureMode::Fullscreen:
@@ -404,6 +417,9 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     }
     capture_.source = job.image;
     capture_.previewSize = job.scaledSize;
+    pristineSource_ = capture_.source;
+    pristineLogicalSize_ = capture_.previewSize;
+    cuts_.clear();
     selection_ = QRectF(QPointF(), job.scaledSize);
     redactionBaseStale_ = true;
     windowMode_ = false;
@@ -486,8 +502,7 @@ bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
 QColor CaptureEditor::annotationColor() const {
   if (usingCustomColor_)
     return customColor_;
-  return QColor(QString::fromLatin1(
-      kColorNames.at(static_cast<std::size_t>(colorIndex_))));
+  return paletteConfig_.palette.at(static_cast<std::size_t>(colorIndex_));
 }
 QRectF CaptureEditor::annotationBounds(const Annotation &annotation) const {
   if (annotation.kind == Annotation::Kind::Marker) {
@@ -960,6 +975,8 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   add(36, QStringLiteral("tool-redact"), {},
       QStringLiteral("Redact · D · %1 · D again toggles")
           .arg(redactionStyleName(redactionStyle_)));
+  add(36, QStringLiteral("tool-cut"), {},
+      QStringLiteral("Cut out a band · X · drag across"));
   add(36, QStringLiteral("tool-text"), {},
       QStringLiteral("Neucha text · T · %1 · Wheel")
           .arg(QString::fromLatin1(
@@ -988,8 +1005,7 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
            QStringLiteral("color-%1").arg(index),
            {},
            QStringLiteral("Color · %1").arg(index + 1),
-           QColor(QString::fromLatin1(
-               kColorNames.at(static_cast<std::size_t>(index))))});
+           paletteConfig_.palette.at(static_cast<std::size_t>(index))});
     }
     buttons.push_back({{palette.left() + 4 + 6 * 28, palette.top() + 4, 24, 28},
                        QStringLiteral("custom-color"), {},
@@ -1007,8 +1023,9 @@ void CaptureEditor::setStatus(QString status) {
 }
 
 CaptureEditor::EditState CaptureEditor::editState() const {
-  return {annotations_, backgroundStyle_, selection_, selectedAnnotation_,
-          selectedAnnotations_, nextMarker_};
+  return {annotations_,        backgroundStyle_,     selection_,
+          selectedAnnotation_, selectedAnnotations_, nextMarker_,
+          cuts_};
 }
 
 void CaptureEditor::applyEditState(const EditState &state) {
@@ -1027,6 +1044,10 @@ void CaptureEditor::applyEditState(const EditState &state) {
       !selectedAnnotations_.contains(selectedAnnotation_))
     selectedAnnotations_.push_back(selectedAnnotation_);
   nextMarker_ = state.nextMarker;
+  if (state.cuts != cuts_) {
+    cuts_ = state.cuts;
+    refreshComposedCapture();
+  }
   editingAnnotation_ = -1;
   interaction_ = Interaction::None;
   freehandPoints_.clear();
@@ -1046,6 +1067,10 @@ void CaptureEditor::cancelActiveDragForHistory() {
   dragStartStateValid_ = false;
   dragChanged_ = false;
   freehandPoints_.clear();
+  if (cutDragActive_) {
+    cutDragActive_ = false;
+    refreshComposedCapture();
+  }
 }
 
 void CaptureEditor::pushUndoState(const EditState &state) {
@@ -1211,6 +1236,15 @@ void CaptureEditor::enterEdit(QString status) {
 }
 
 void CaptureEditor::handleEscape() {
+  if (cutDragActive_) {
+    cutDragActive_ = false;
+    dragging_ = false;
+    refreshComposedCapture();
+    setStatus(QStringLiteral("Cut cancelled"));
+    updatePointerCursor();
+    update();
+    return;
+  }
   const qint64 closeWindowMs =
       static_cast<qint64>(QApplication::doubleClickInterval()) * 2;
   if (escapeTimer_.isValid() && escapeTimer_.elapsed() <= closeWindowMs) {
@@ -1468,6 +1502,10 @@ void CaptureEditor::handleToolbar(const QString &action) {
     selectedAnnotation_ = -1;
     setStatus(QStringLiteral("Redact: %1 · drag sensitive content · D toggles")
                   .arg(redactionStyleName(redactionStyle_)));
+  } else if (action == QStringLiteral("tool-cut")) {
+    tool_ = Tool::Cut;
+    selectedAnnotation_ = -1;
+    setStatus(QStringLiteral("Cut: drag across a band to remove it"));
   } else if (action == QStringLiteral("tool-text"))
     tool_ = Tool::Text;
   else if (action == QStringLiteral("tool-eyedropper")) {
@@ -1581,6 +1619,19 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     return;
   }
 
+  if (cutDragActive_) {
+    // Any key here (Esc's own cancel already returned above) leaves the
+    // live cut with no clean way to finish: Enter/Ctrl+C/Ctrl+S/P would
+    // export/pin capture_ still composed with liveCut_, and a tool-switch
+    // key changes tool_ so mouseReleaseEvent's Cut branch never runs,
+    // stranding cutDragActive_. Cancel first, same cleanup as
+    // handleEscape(), then let the key's own handling run below.
+    cutDragActive_ = false;
+    dragging_ = false;
+    refreshComposedCapture();
+    setStatus(QStringLiteral("Cut cancelled"));
+  }
+
   const bool redoShortcut = event->matches(QKeySequence::Redo) ||
                             (event->key() == Qt::Key_Y &&
                              event->modifiers().testFlag(Qt::ControlModifier));
@@ -1663,6 +1714,9 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
           QStringLiteral("Redact: %1 · drag sensitive content · D toggles")
               .arg(redactionStyleName(redactionStyle_)));
     }
+  } else if (event->key() == Qt::Key_X) {
+    tool_ = Tool::Cut;
+    setStatus(QStringLiteral("Cut: drag across a band to remove it"));
   } else if (event->key() == Qt::Key_T) {
     tool_ = Tool::Text;
   } else if (event->key() == Qt::Key_I) {
@@ -1870,6 +1924,53 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       }
       }
       dragChanged_ = true;
+    }
+    if (tool_ == Tool::Cut && dragging_) {
+      const QPointF point = toAnnotationPoint(cursor_);
+      const QPointF delta = point - cutDragStart_;
+      if (!cutDragActive_ &&
+          std::max(std::abs(delta.x()), std::abs(delta.y())) > 3.0) {
+        cutDragActive_ = true;
+        // Dominant vertical delta cuts a horizontal band (rows); dominant
+        // horizontal delta cuts a vertical band (columns).
+        liveCut_.orientation = std::abs(delta.y()) >= std::abs(delta.x())
+                                    ? Qt::Horizontal
+                                    : Qt::Vertical;
+        // Cache the source/preview ratio and selection origin as of *now*
+        // (before this move's refreshComposedCapture call below shrinks
+        // capture_). Re-deriving them from capture_ on later moves would
+        // drift because refreshComposedCapture(&liveCut_) recomposes a
+        // shrunk preview every frame.
+        cutDragOriginOffset_ = liveCut_.orientation == Qt::Horizontal
+                                    ? selection_.top()
+                                    : selection_.left();
+        cutDragRatio_ =
+            liveCut_.orientation == Qt::Horizontal
+                ? capture_.source.height() /
+                      static_cast<qreal>(capture_.previewSize.height())
+                : capture_.source.width() /
+                      static_cast<qreal>(capture_.previewSize.width());
+      }
+      if (cutDragActive_) {
+        const bool horizontal = liveCut_.orientation == Qt::Horizontal;
+        const qreal a = horizontal ? cutDragStart_.y() : cutDragStart_.x();
+        const qreal b = horizontal ? point.y() : point.x();
+        const qreal lo = std::min(a, b);
+        const qreal hi = std::max(a, b);
+        cutBandLo_ = lo;
+        cutBandHi_ = hi;
+        // Annotation space is selection-relative logical px; map to
+        // absolute logical, then to native source px via the cached ratio.
+        liveCut_.sourceStart = static_cast<int>(
+            std::round((cutDragOriginOffset_ + lo) * cutDragRatio_));
+        liveCut_.sourceEnd = static_cast<int>(
+            std::round((cutDragOriginOffset_ + hi) * cutDragRatio_));
+        liveCut_.logicalStart =
+            static_cast<int>(std::round(cutDragOriginOffset_ + lo));
+        liveCut_.logicalEnd =
+            static_cast<int>(std::round(cutDragOriginOffset_ + hi));
+        refreshComposedCapture(&liveCut_);
+      }
     }
     if ((tool_ == Tool::Freehand || tool_ == Tool::Highlighter) && dragging_) {
       const QPointF point = toAnnotationPoint(cursor_);
@@ -2134,6 +2235,13 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     updatePointerCursor();
   } else if (tool_ == Tool::Text) {
     beginText(point);
+  } else if (tool_ == Tool::Cut) {
+    // Activation waits for a dominant drag axis (see mouseMoveEvent); a
+    // plain click never crosses that threshold and mouseReleaseEvent treats
+    // it as a no-op.
+    cutDragStart_ = point;
+    cutDragActive_ = false;
+    dragging_ = true;
   } else {
     dragStart_ = point;
     dragging_ = true;
@@ -2211,6 +2319,62 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
           "Crop updated · Select moves layers · wheel zooms selected layer"));
     if (changed)
       scheduleSnapshot();
+    updatePointerCursor();
+    update();
+    return;
+  }
+
+  if (tool_ == Tool::Cut) {
+    dragging_ = false;
+    if (!cutDragActive_) {
+      // Plain click: never crossed the activation threshold, no-op.
+      update();
+      return;
+    }
+    const qreal lo = cutBandLo_;
+    const qreal hi = cutBandHi_;
+    const bool horizontal = liveCut_.orientation == Qt::Horizontal;
+    const qreal band = hi - lo;
+    const qreal extent =
+        horizontal ? selection_.height() : selection_.width();
+    if (band <= 0.0 || band >= extent) {
+      // Full-extent (or empty) band: toAnnotationPoint clamps lo/hi to
+      // [0, extent], so an edge-to-edge drag on a full selection lands
+      // exactly here. removeBand() no-ops on this band, so applying it
+      // would still shrink composedLogicalSize/selection_ while the actual
+      // pixels don't shrink -- desyncing preview size from the source
+      // aspect. Bail out instead.
+      cutDragActive_ = false;
+      refreshComposedCapture();
+      setStatus(QStringLiteral("Cut too large — nothing left"));
+      updatePointerCursor();
+      update();
+      return;
+    }
+    recordEdit(); // push pre-cut state (with the OLD selection/annotations)
+    cuts_.push_back(liveCut_);
+    for (Annotation &annotation : annotations_) {
+      // Shift every stored coordinate on the cut axis: horizontal cut shifts
+      // y values, vertical cut shifts x values.
+      auto shift = [&](QPointF &point) {
+        if (horizontal)
+          point.setY(shiftForCut(point.y(), lo, hi));
+        else
+          point.setX(shiftForCut(point.x(), lo, hi));
+      };
+      shift(annotation.start);
+      shift(annotation.end);
+      for (QPointF &point : annotation.points)
+        shift(point);
+    }
+    if (horizontal)
+      selection_.setHeight(std::max<qreal>(1.0, selection_.height() - band));
+    else
+      selection_.setWidth(std::max<qreal>(1.0, selection_.width() - band));
+    cutDragActive_ = false;
+    refreshComposedCapture();
+    scheduleSnapshot();
+    setStatus(QStringLiteral("Cut applied · Ctrl+Z to undo"));
     updatePointerCursor();
     update();
     return;
@@ -2395,8 +2559,21 @@ void CaptureEditor::updatePointerCursor() {
     setCursor(Qt::PointingHandCursor);
   else if (tool_ == Tool::Text)
     setCursor(Qt::IBeamCursor);
+  else if (tool_ == Tool::Cut)
+    setCursor(Qt::CrossCursor);
   else
     setCursor(Qt::CrossCursor);
+}
+
+void CaptureEditor::refreshComposedCapture(const CutOp *liveCut) {
+  QVector<CutOp> cuts = cuts_;
+  if (liveCut)
+    cuts.push_back(*liveCut);
+  capture_.source = composeCuts(pristineSource_, cuts);
+  capture_.previewSize = composedLogicalSize(pristineLogicalSize_, cuts);
+  backdropKey_ = 0;           // force backdrop pixmap rebuild
+  redactionBaseStale_ = true; // force redaction layer rebuild
+  update();
 }
 
 void CaptureEditor::refreshBackdropCache() {
@@ -2592,7 +2769,8 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         AnnotationLayer::Default)
       defaultAnnotations.push_back(annotations_.at(index));
   }
-  if (dragging_ && tool_ != Tool::Select && tool_ != Tool::Redact) {
+  if (dragging_ && tool_ != Tool::Select && tool_ != Tool::Redact &&
+      tool_ != Tool::Cut) {
     Annotation preview;
     if (tool_ == Tool::Freehand || tool_ == Tool::Highlighter) {
       preview.kind = tool_ == Tool::Highlighter ? Annotation::Kind::Highlighter
@@ -2648,6 +2826,21 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         QPen(QColor(QStringLiteral("#0a84ff")), 2.0 / scale));
     painter.setBrush(QColor(10, 132, 255, 38));
     painter.drawRect(marqueeRect_.normalized());
+  }
+  if (cutDragActive_) {
+    // Snagit-style joint marker: shows where the two edges will seam once
+    // the band collapses. `cutBandLo_` is already in this block's
+    // annotation-space coordinate system (selection-relative logical px).
+    const qreal scale = std::max<qreal>(editScale(), 0.01);
+    painter.setPen(
+        QPen(QColor(QStringLiteral("#0a84ff")), 1.0 / scale, Qt::DashLine));
+    painter.setBrush(Qt::NoBrush);
+    if (liveCut_.orientation == Qt::Horizontal)
+      painter.drawLine(QPointF(0, cutBandLo_),
+                       QPointF(selection_.width(), cutBandLo_));
+    else
+      painter.drawLine(QPointF(cutBandLo_, 0),
+                       QPointF(cutBandLo_, selection_.height()));
   }
 
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
@@ -2808,6 +3001,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
        {QStringLiteral("F / H"), QStringLiteral("Freehand / Highlighter")},
        {QStringLiteral("C"), QStringLiteral("Marker")},
        {QStringLiteral("R / D"), QStringLiteral("Rectangle / Redact")},
+       {QStringLiteral("X"), QStringLiteral("Cut out a band")},
        {QStringLiteral("T"), QStringLiteral("Text")},
        {QStringLiteral("Double click"), QStringLiteral("Edit text layer")},
        {QStringLiteral("1–6"), QStringLiteral("Color")},

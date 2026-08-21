@@ -1,6 +1,8 @@
 #pragma once
 
 #include "capture.hpp"
+#include "cut.hpp"
+#include "palette-config.hpp"
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -85,6 +87,7 @@ public:
     Marker,
     Rectangle,
     Redact,
+    Cut,
     Text,
     Ocr,
     Eyedropper
@@ -128,6 +131,7 @@ private:
     int selectedAnnotation = -1;
     QVector<int> selectedAnnotations;
     int nextMarker = 1;
+    QVector<CutOp> cuts;
   };
 
   [[nodiscard]] QRectF annotationBounds(const Annotation &annotation) const;
@@ -185,6 +189,7 @@ private:
   void paintEdit(QPainter &painter);
   void paintSelect(QPainter &painter);
   void refreshBackdropCache();
+  void refreshComposedCapture(const CutOp *liveCut = nullptr);
   void runOcr(const QRectF &localSelection = {});
   void setStatus(QString status);
   void scaleSelectedAnnotation(qreal factor);
@@ -192,6 +197,11 @@ private:
   void updatePointerCursor();
 
   CaptureData capture_;
+  // Untouched capture, kept alongside cuts_ so cuts can be recomposed from
+  // scratch (undo/redo, in-progress cut preview) without accumulating error.
+  QImage pristineSource_;
+  QSize pristineLogicalSize_;
+  QVector<CutOp> cuts_;
   Phase phase_ = Phase::Select;
   Tool tool_ = Tool::Select;
   /// Set by the first key event, which carries a fresh modifier snapshot.
@@ -208,6 +218,18 @@ private:
   bool marqueeAdditive_ = false;
   Interaction interaction_ = Interaction::None;
   QVector<QPointF> freehandPoints_;
+  // Cut tool live-drag state. cutDragStart_/cutBandLo_/cutBandHi_ and
+  // liveCut_.orientation are in annotation space (selection-relative logical
+  // px); cutDragRatio_/cutDragOriginOffset_ are cached once the drag axis
+  // locks so later moves (which recompose a shrinking capture_ each frame)
+  // don't re-derive them from a live preview that has already collapsed.
+  bool cutDragActive_ = false;
+  QPointF cutDragStart_;
+  CutOp liveCut_;
+  qreal cutBandLo_ = 0.0;
+  qreal cutBandHi_ = 0.0;
+  qreal cutDragRatio_ = 1.0;
+  qreal cutDragOriginOffset_ = 0.0;
   bool windowMode_ = false;
   BackgroundStyle backgroundStyle_ = BackgroundStyle::None;
   bool busy_ = false;
@@ -216,7 +238,8 @@ private:
   bool usingCustomColor_ = false;
   int hoveredWindow_ = -1;
   int colorIndex_ = 0;
-  QColor customColor_ = QColor(QStringLiteral("#ff375f"));
+  PaletteConfig paletteConfig_ = defaultPaletteConfig();
+  QColor customColor_;
   qreal customHue_ = 0.98;
   int nextMarker_ = 1;
   qreal annotationSize_ = 4.0;
