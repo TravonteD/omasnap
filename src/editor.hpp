@@ -35,6 +35,7 @@ public:
   explicit CaptureEditor(CaptureData capture,
                          CaptureMode mode = CaptureMode::Region,
                          QuickOutputMode quickOutput = QuickOutputMode::None,
+                         OperationLog log = {},
                          QWidget *parent = nullptr);
   ~CaptureEditor() override;
 
@@ -68,6 +69,12 @@ public:
   [[nodiscard]] QString measurementText() const;
   /** Current monitor data (background capture may be in flight). */
   const CaptureData &captureData() const { return capture_; }
+  [[nodiscard]] QRectF currentSelection() const { return selection_; }
+  [[nodiscard]] const QVector<Operation> &operationLog() const { return ops_; }
+  [[nodiscard]] int operationIndex() const { return opIndex_; }
+  [[nodiscard]] QString workingSourcePath() const { return snapshotPath_; }
+  [[nodiscard]] QString workingLogPath() const;
+  bool restoreOperationLog(const QString &path, QString &error);
 
   /**
    * Disables working-snapshot persistence. The hidden editor behind instant
@@ -228,9 +235,14 @@ private:
   void scheduleSnapshot();
   void startSnapshotRender();
   void pinSnapshot();
-  void startWindowCleanCapture(int index);
-  void pushUndoState(const EditState &state);
-  void recordEdit();
+  void commitOp(Operation op);
+  void commitAnnotate(Annotation annotation);
+  void commitPatch(const QVector<int> &indices);
+  void commitDelete(const QVector<int> &indices);
+  void commitCrop(const QRectF &crop);
+  void commitCut(CutOp cut);
+  void commitBackground(BackgroundStyle style);
+  void replayLog();
   void redoEdit();
   void selectWindowInDirection(int key);
   void finish(OutputMode mode);
@@ -334,6 +346,7 @@ private:
   // is written at default PNG compression instead of the fast edit encoding.
   bool snapshotOutputRequested_ = false;
   bool suppressSnapshots_ = false;
+  bool sourceWritten_ = false;
   // Background monitor capture fed to CaptureEditor::CaptureMode dispatch.
   struct CaptureJob {
     bool ok = false;
@@ -344,25 +357,17 @@ private:
   bool capturePending_ = false;
   bool captureStarted_ = false;
   CaptureMode pendingMode_ = CaptureMode::Region;
-  // Background clean window surface capture.
-  struct WindowJob {
-    bool ok = false;
-    QImage image;
-    QSize scaledSize;
-    QString error;
-  };
-  QFutureWatcher<WindowJob> windowWatcher_;
-  bool windowPending_ = false;
   // Background render for --pin.
   QFutureWatcher<QImage> pinWatcher_;
   bool pinPending_ = false;
   QString pendingPinPath_;
   QVector<Annotation> annotations_;
+  QVector<Operation> ops_;
+  int opIndex_ = 0;
+  quint64 nextAnnotationId_ = 1;
   int selectedAnnotation_ = -1;
   int editingAnnotation_ = -1;
   Annotation originalAnnotation_;
-  QVector<EditState> undoStack_;
-  QVector<EditState> redoStack_;
   EditState dragStartState_;
   bool dragStartStateValid_ = false;
   bool dragChanged_ = false;

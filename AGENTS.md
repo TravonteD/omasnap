@@ -29,10 +29,10 @@ markers, text, OCR). Finished captures go to clipboard,
 |---|---|
 | `src/main.cpp` | CLI parsing, single-instance lock, mode dispatch (capture / edit file / pin) |
 | `src/instance-lock.cpp/.hpp` | Single-instance handover: cancel a running overlay, or stop it and take over for `--file` |
-| `src/capture.cpp/.hpp` | Capture selection overlay, rendering, output, and private runtime snapshots |
-| `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, undo/redo, rendering, export |
+| `src/capture.cpp/.hpp` | Capture, rendering, output, and source+JSON operation-log persistence |
+| `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, operation-log undo/redo, export |
 | `src/pin.cpp/.hpp` | Pinned-capture layer-shell surfaces (bottom-right, all workspaces) |
-| `src/surface-capture.cpp` | Clean window capture via `ext-image-copy-capture` Wayland protocol |
+| `src/surface-capture.cpp` | In-process output/window capture via `ext-image-copy-capture` |
 | `src/icons.cpp/.hpp` | Vector icon renderer for toolbar and pin controls |
 | `src/cli-path.cpp/.hpp` | Command-line image target resolution |
 | `src/eyedropper.cpp/.hpp` | Display-to-source color sampling |
@@ -59,7 +59,7 @@ Always run `make check` after behavioral changes. CI
 push and PR.
 
 Dependencies (Arch): `base-devel cmake ninja pkgconf qt6-base layer-shell-qt
-wayland wayland-protocols grim wl-clipboard tesseract tesseract-data-eng`.
+wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng`.
 
 ## Release process
 

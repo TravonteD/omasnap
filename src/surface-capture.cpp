@@ -30,12 +30,18 @@ struct Toplevel {
   std::string identifier;
 };
 
+struct OutputInfo {
+  wl_output *output = nullptr;
+  std::string name;
+};
+
 struct CaptureState {
   wl_display *display = nullptr;
   wl_registry *registry = nullptr;
   wl_shm *shm = nullptr;
   ext_foreign_toplevel_list_v1 *toplevelList = nullptr;
   ext_foreign_toplevel_image_capture_source_manager_v1 *sourceManager = nullptr;
+  ext_output_image_capture_source_manager_v1 *outputSourceManager = nullptr;
   ext_image_copy_capture_manager_v1 *captureManager = nullptr;
   ext_image_capture_source_v1 *source = nullptr;
   ext_image_copy_capture_session_v1 *session = nullptr;
@@ -43,6 +49,7 @@ struct CaptureState {
   wl_shm_pool *pool = nullptr;
   wl_buffer *buffer = nullptr;
   std::vector<std::unique_ptr<Toplevel>> toplevels;
+  std::vector<std::unique_ptr<OutputInfo>> outputs;
   std::vector<uint32_t> shmFormats;
   uint32_t width = 0;
   uint32_t height = 0;
@@ -73,6 +80,12 @@ struct CaptureState {
     if (sourceManager)
       ext_foreign_toplevel_image_capture_source_manager_v1_destroy(
           sourceManager);
+    for (const auto &output : outputs) {
+      if (output->output)
+        wl_output_release(output->output);
+    }
+    if (outputSourceManager)
+      ext_output_image_capture_source_manager_v1_destroy(outputSourceManager);
     if (captureManager)
       ext_image_copy_capture_manager_v1_destroy(captureManager);
     if (buffer)
@@ -117,6 +130,19 @@ void listFinished(void *, ext_foreign_toplevel_list_v1 *) {}
 constexpr ext_foreign_toplevel_list_v1_listener kListListener{listToplevel,
                                                               listFinished};
 
+void outputGeometry(void *, wl_output *, int32_t, int32_t, int32_t, int32_t,
+                    int32_t, const char *, const char *, int32_t) {}
+void outputMode(void *, wl_output *, uint32_t, int32_t, int32_t, int32_t) {}
+void outputDone(void *, wl_output *) {}
+void outputScale(void *, wl_output *, int32_t) {}
+void outputName(void *data, wl_output *, const char *name) {
+  static_cast<OutputInfo *>(data)->name = name ? name : "";
+}
+void outputDescription(void *, wl_output *, const char *) {}
+constexpr wl_output_listener kOutputListener{outputGeometry, outputMode,
+                                             outputDone,     outputScale,
+                                             outputName,     outputDescription};
+
 void registryGlobal(void *data, wl_registry *registry, uint32_t name,
                     const char *interface, uint32_t version) {
   auto &state = *static_cast<CaptureState *>(data);
@@ -148,6 +174,23 @@ void registryGlobal(void *data, wl_registry *registry, uint32_t name,
         static_cast<ext_image_copy_capture_manager_v1 *>(wl_registry_bind(
             registry, name, &ext_image_copy_capture_manager_v1_interface,
             std::min(version, 1U)));
+  } else if (std::strcmp(
+                 interface,
+                 ext_output_image_capture_source_manager_v1_interface.name) ==
+             0) {
+    state.outputSourceManager =
+        static_cast<ext_output_image_capture_source_manager_v1 *>(
+            wl_registry_bind(
+                registry, name,
+                &ext_output_image_capture_source_manager_v1_interface,
+                std::min(version, 1U)));
+  } else if (std::strcmp(interface, wl_output_interface.name) == 0 &&
+             version >= 4) {
+    auto output = std::make_unique<OutputInfo>();
+    output->output = static_cast<wl_output *>(
+        wl_registry_bind(registry, name, &wl_output_interface, 4));
+    wl_output_add_listener(output->output, &kOutputListener, output.get());
+    state.outputs.push_back(std::move(output));
   }
 }
 void registryRemoved(void *, wl_registry *, uint32_t) {}
@@ -368,6 +411,51 @@ QImage normalizeWaylandCapture(const QImage &image, std::uint32_t transform) {
   }
 }
 
+static bool captureCurrentSource(CaptureState &state, QImage &image, QString &error,
+                          const QString &stoppedError,
+                          const QString &failedError,
+                          const QString &decodeError,
+                          const QString &transformError) {
+  state.session = ext_image_copy_capture_manager_v1_create_session(
+      state.captureManager, state.source, 0);
+  ext_image_copy_capture_session_v1_add_listener(state.session,
+                                                 &kSessionListener, &state);
+  if (!dispatchUntil(state, &state.constraintsDone, 2000, error))
+    return false;
+  if (state.stopped) {
+    error = stoppedError;
+    return false;
+  }
+  if (!createShmBuffer(state, error))
+    return false;
+
+  state.frame = ext_image_copy_capture_session_v1_create_frame(state.session);
+  ext_image_copy_capture_frame_v1_add_listener(state.frame, &kFrameListener,
+                                               &state);
+  ext_image_copy_capture_frame_v1_attach_buffer(state.frame, state.buffer);
+  ext_image_copy_capture_frame_v1_damage_buffer(
+      state.frame, 0, 0, static_cast<int32_t>(state.width),
+      static_cast<int32_t>(state.height));
+  ext_image_copy_capture_frame_v1_capture(state.frame);
+  if (!dispatchUntil(state, &state.frameDone, 2000, error) ||
+      !state.frameReady) {
+    if (error.isEmpty())
+      error = failedError;
+    return false;
+  }
+  const QImage captured = copyCapturedImage(state);
+  if (captured.isNull()) {
+    error = decodeError;
+    return false;
+  }
+  image = normalizeWaylandCapture(captured, state.transform);
+  if (image.isNull()) {
+    error = transformError;
+    return false;
+  }
+  return true;
+}
+
 bool captureWindowSurface(const WindowTarget &window, QImage &image,
                           QString &error) {
   if (window.stableId.isEmpty()) {
@@ -408,43 +496,56 @@ bool captureWindowSurface(const WindowTarget &window, QImage &image,
   state.source =
       ext_foreign_toplevel_image_capture_source_manager_v1_create_source(
           state.sourceManager, (*match)->handle);
-  state.session = ext_image_copy_capture_manager_v1_create_session(
-      state.captureManager, state.source, 0);
-  ext_image_copy_capture_session_v1_add_listener(state.session,
-                                                 &kSessionListener, &state);
-  if (!dispatchUntil(state, &state.constraintsDone, 2000, error))
-    return false;
-  if (state.stopped) {
-    error = QStringLiteral("Compositor stopped native window capture");
-    return false;
-  }
-  if (!createShmBuffer(state, error))
-    return false;
+  return captureCurrentSource(
+      state, image, error,
+      QStringLiteral("Compositor stopped native window capture"),
+      QStringLiteral("Compositor could not capture the selected window surface"),
+      QStringLiteral("Could not decode native window capture"),
+      QStringLiteral("Unsupported transform in native window capture"));
+}
 
-  state.frame = ext_image_copy_capture_session_v1_create_frame(state.session);
-  ext_image_copy_capture_frame_v1_add_listener(state.frame, &kFrameListener,
-                                               &state);
-  ext_image_copy_capture_frame_v1_attach_buffer(state.frame, state.buffer);
-  ext_image_copy_capture_frame_v1_damage_buffer(
-      state.frame, 0, 0, static_cast<int32_t>(state.width),
-      static_cast<int32_t>(state.height));
-  ext_image_copy_capture_frame_v1_capture(state.frame);
-  if (!dispatchUntil(state, &state.frameDone, 2000, error) ||
-      !state.frameReady) {
-    if (error.isEmpty())
-      error = QStringLiteral(
-          "Compositor could not capture the selected window surface");
+bool captureOutputSurface(const MonitorInfo &monitor, QImage &image,
+                          QString &error) {
+  if (monitor.name.isEmpty()) {
+    error = QStringLiteral("Focused monitor has no output name");
     return false;
   }
-  const QImage captured = copyCapturedImage(state);
-  if (captured.isNull()) {
-    error = QStringLiteral("Could not decode native window capture");
+
+  CaptureState state;
+  state.display = wl_display_connect(nullptr);
+  if (!state.display) {
+    error = QStringLiteral("Could not connect to Wayland for output capture");
     return false;
   }
-  image = normalizeWaylandCapture(captured, state.transform);
-  if (image.isNull()) {
-    error = QStringLiteral("Unsupported transform in native window capture");
+  state.registry = wl_display_get_registry(state.display);
+  wl_registry_add_listener(state.registry, &kRegistryListener, &state);
+  if (wl_display_roundtrip(state.display) < 0 ||
+      wl_display_roundtrip(state.display) < 0) {
+    error = QStringLiteral("Could not enumerate Wayland capture sources");
     return false;
   }
-  return true;
+  if (!state.shm || !state.outputSourceManager || !state.captureManager) {
+    error = QStringLiteral(
+        "Compositor does not expose ext-image-copy-capture output capture");
+    return false;
+  }
+
+  const auto match =
+      std::ranges::find_if(state.outputs, [&](const auto &output) {
+        return output->name == monitor.name.toStdString();
+      });
+  if (match == state.outputs.end()) {
+    error = QStringLiteral("Could not find Wayland output %1 for capture")
+                .arg(monitor.name);
+    return false;
+  }
+
+  state.source = ext_output_image_capture_source_manager_v1_create_source(
+      state.outputSourceManager, (*match)->output);
+  return captureCurrentSource(
+      state, image, error,
+      QStringLiteral("Compositor stopped native output capture"),
+      QStringLiteral("Compositor could not capture the focused output"),
+      QStringLiteral("Could not decode native output capture"),
+      QStringLiteral("Unsupported transform in native output capture"));
 }

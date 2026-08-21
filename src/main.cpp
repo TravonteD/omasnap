@@ -10,6 +10,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFile>
 #include <QGuiApplication>
 #include <QLockFile>
 #include <QScreen>
@@ -245,7 +246,7 @@ int main(int argc, char **argv) {
   QLockFile instanceLock(
       QDir(runtime).filePath(QStringLiteral("omasnap.instance")));
   // Every capture, quick output included, dismisses a running overlay instead
-  // of starting a second one: grim would otherwise photograph that overlay.
+  // of starting a second one: a late capture would otherwise photograph that overlay.
   // Editing an image always takes over so the requested editor can open.
   const InstanceLockResult lockResult = acquireInstanceLock(
       instanceLock, editingImage ? InstanceMode::EditFile
@@ -261,6 +262,7 @@ int main(int argc, char **argv) {
   }
 
   CaptureData capture;
+  OperationLog restoredLog;
   QString error;
   if (editingImage) {
     QImage image;
@@ -285,6 +287,13 @@ int main(int argc, char **argv) {
         return 1;
       }
       inputName = localFile;
+      const QString sidecar = operationLogPath(localFile);
+      if (QFile::exists(sidecar) &&
+          !loadOperationLog(sidecar, restoredLog, error)) {
+        qCritical().noquote()
+            << QStringLiteral("Could not restore operation log: %1").arg(error);
+        return 1;
+      }
     }
     capture.source = image;
     capture.previewSize = image.size();
@@ -319,7 +328,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  CaptureEditor editor(std::move(capture), captureMode, editorQuickOutput);
+  CaptureEditor editor(std::move(capture), captureMode, editorQuickOutput,
+                       restoredLog);
   if (instantFullscreenOutput)
     editor.setSuppressSnapshots(true);
   QObject::connect(&editor, &CaptureEditor::captureReady, &editor,

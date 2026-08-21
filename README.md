@@ -13,8 +13,8 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - A pointer-side readout that turns any drag into a ruler: the pointer position
   while the crosshair is idle, then the frame size in native export pixels while a
   region, a hovered window, or a crop handle is being sized.
-- Clean window-surface capture through Wayland image-copy protocols. A failed native
-  capture stays in the window picker; Omasnap never substitutes a crop of the desktop.
+- Window capture is a crop of the focused-monitor frame. Overlapping windows stay
+  visible; there is no second clean-window recapture.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
 - Arrows, straight lines, smoothed freehand strokes, translucent highlighter strokes,
   hollow or filled rectangles (optionally rounded) and ellipses, numbered markers,
@@ -27,10 +27,10 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
   live preview and dashed seam marker while dragging; annotations shift to follow.
 - Pin a finished capture as a bottom-right always-on-top layer surface, launched
   from the same `omasnap` executable and visible on every workspace.
-- Crash-resistant working snapshots under `/run/user/<UID>/omasnap/` (falling back to
-  a private `/tmp/omasnap-<UID>/`), written immediately after selection and overwritten
-  after every completed edit. Saving moves that file into `~/Pictures/Screenshots`;
-  clipboard output streams the same PNG.
+- Crash-resistant working documents under `/run/user/<UID>/omasnap/` (falling back to
+  a private `/tmp/omasnap-<UID>/`): the original source image plus a sidecar JSON
+  operation log. Undo still works after a crash or `--file` reopen. Saving and
+  copying write a normal flattened PNG to the clipboard or `~/Pictures/Screenshots`.
 - Verified PNG clipboard output through `wl-copy`/`wl-paste`, plus timestamped files
   under `~/Pictures/Screenshots` by default.
 - Open an image already on the clipboard directly in the annotation editor.
@@ -39,9 +39,10 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 ## Platform scope
 
 The supported target is **Wayland + Hyprland**, with Omarchy as the primary integration.
-The renderer, layer surface, clipboard, and clean-window capture use Wayland protocols;
-monitor/window discovery currently calls `hyprctl`. `grim` captures the monitor before
-the layer maps. Selection displays that captured frame, while the annotation editor uses
+The renderer, layer surface, clipboard, and monitor capture use Wayland protocols;
+monitor/window discovery currently calls `hyprctl`. The focused output is captured
+in-process through `ext-image-copy-capture` before the layer maps. Selection displays
+that captured frame, while the annotation editor uses
 a translucent layer scrim over the live desktop and draws only the selected capture.
 Another Wayland compositor could support the application after supplying equivalent
 monitor and window discovery; generic Wayland support is not claimed by 1.0.
@@ -49,7 +50,6 @@ monitor and window discovery; generic Wayland support is not claimed by 1.0.
 Runtime commands used by the application:
 
 - `hyprctl`
-- `grim`
 - `wl-copy` and `wl-paste`
 - `tesseract`
 - `omarchy-notification-send` when available; saved captures include a thumbnail and
@@ -113,7 +113,7 @@ Install the complete build/runtime dependency set:
 ```bash
 sudo pacman -S --needed \
   base-devel cmake ninja pkgconf qt6-base layer-shell-qt \
-  wayland wayland-protocols hyprland grim wl-clipboard \
+  wayland wayland-protocols hyprland wl-clipboard \
   tesseract tesseract-data-eng tesseract-data-tha
 ```
 
@@ -332,9 +332,10 @@ QT_QPA_PLATFORM=offscreen \
 ```
 
 The smoke executable exercises region/window/fullscreen startup modes, capture selection,
-temporary snapshot updates, annotation tools, undo/redo, vector movement and scaling,
-text editing, OCR, native-DPI output, endpoint-only line selection, external crop
-handles, and the native-pixel measurement readout on a scaled monitor.
+working-document persistence (source plus op-log JSON), annotation tools, undo/redo
+replay, vector movement and scaling, text editing, OCR, native-DPI output,
+endpoint-only line selection, external crop handles, and the native-pixel
+measurement readout on a scaled monitor.
 
 `.github/workflows/build-linux.yml` performs the same release build and interaction smoke
 in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux

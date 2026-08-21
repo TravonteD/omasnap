@@ -1,12 +1,16 @@
 /** @fileoverview Declares screenshot capture, rendering, and output types. */
 #pragma once
 
+#include "cut.hpp"
+
 #include <cstdint>
 
 #include <QPainterPath>
 #include <QColor>
 #include <QImage>
+#include <QPointF>
 #include <QRect>
+#include <QRectF>
 #include <QString>
 #include <QVector>
 
@@ -72,8 +76,31 @@ struct Annotation {
   SpotlightShape spotlightShape = SpotlightShape::Ellipse;
   quint32 redactionSeed = 0;
   TextBackground textBackground = TextBackground::Pill;
+  quint64 id = 0;
 
   bool operator==(const Annotation &) const = default;
+};
+
+struct Operation {
+  enum class Type { Crop, Background, Annotate, Patch, Delete, Cut };
+
+  Type type = Type::Annotate;
+  QRectF crop;
+  BackgroundStyle background = BackgroundStyle::None;
+  QVector<Annotation> annotations;
+  QVector<quint64> ids;
+  CutOp cut;
+
+  bool operator==(const Operation &) const = default;
+};
+
+struct OperationLog {
+  QVector<Operation> ops;
+  int index = 0;
+  quint64 nextId = 1;
+  int nextMarker = 1;
+
+  bool operator==(const OperationLog &) const = default;
 };
 
 enum class AnnotationLayer { Redaction, Default };
@@ -108,6 +135,15 @@ enum class AnnotationLayer { Redaction, Default };
 [[nodiscard]] QRectF annotationTextBounds(const Annotation &annotation);
 [[nodiscard]] bool captureWindowSurface(const WindowTarget &window,
                                         QImage &image, QString &error);
+/** Captures the named output through ext-image-copy-capture. */
+[[nodiscard]] bool captureOutputSurface(const MonitorInfo &monitor,
+                                        QImage &image, QString &error);
+[[nodiscard]] QString operationLogPath(const QString &imagePath);
+[[nodiscard]] bool saveOperationLog(const QString &path, const OperationLog &log,
+                                    QString &error);
+[[nodiscard]] bool loadOperationLog(const QString &path, OperationLog &log,
+                                    QString &error);
+[[nodiscard]] QString temporaryExportPath();
 /** Returns an upright image for captured Wayland buffer contents. */
 [[nodiscard]] QImage normalizeWaylandCapture(const QImage &image,
                                              std::uint32_t transform);
@@ -168,5 +204,7 @@ void prunePinnedSnapshots();
 [[nodiscard]] bool saveTemporarySnapshot(const QImage &image, QString path,
                                          QString &error, int quality = -1);
 [[nodiscard]] QString recognizeText(const QImage &image, QString &error);
+/** Quotes a string for a shell argument passed to omarchy-notification-send. */
+[[nodiscard]] QString shellQuote(QString value);
 void sendCaptureNotification(const QString &message,
                              const QString &imagePath = {});

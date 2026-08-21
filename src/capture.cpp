@@ -5,15 +5,16 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QLinearGradient>
 #include <QPainter>
+#include <QPointF>
 #include <QPainterPath>
 #include <QProcess>
 #include <QRandomGenerator>
@@ -127,51 +128,6 @@ ProcessResult runProcess(const QString &program, const QStringList &arguments,
           finished ? process.exitCode() : -1, finished};
 }
 
-/**
- * Runs a process whose stdout carries a large payload, draining the pipe as it
- * arrives into one buffer sized up front. Letting QProcess buffer the whole
- * payload first costs an extra copy of the full frame.
- */
-ProcessResult runStreamingProcess(const QString &program,
-                                  const QStringList &arguments,
-                                  qsizetype expectedBytes, int timeoutMs) {
-  QProcess process;
-  process.setProcessChannelMode(QProcess::SeparateChannels);
-  process.start(program, arguments, QIODevice::ReadOnly);
-  if (!process.waitForStarted(2000))
-    return {{}, process.errorString().toUtf8(), -1, false};
-
-  QByteArray output;
-  output.reserve(std::max<qsizetype>(expectedBytes, 0));
-  const auto drain = [&process, &output] {
-    const qint64 available = process.bytesAvailable();
-    if (available <= 0)
-      return;
-    const qsizetype offset = output.size();
-    output.resize(offset + available);
-    const qint64 read = process.read(output.data() + offset, available);
-    output.resize(offset + std::max<qint64>(read, 0));
-  };
-
-  QElapsedTimer clock;
-  clock.start();
-  const auto remainingMs = [&clock, timeoutMs] {
-    return std::max<qint64>(0, timeoutMs - clock.elapsed());
-  };
-  while (remainingMs() > 0 &&
-         process.waitForReadyRead(static_cast<int>(remainingMs())))
-    drain();
-
-  const bool finished =
-      process.state() == QProcess::NotRunning ||
-      process.waitForFinished(static_cast<int>(remainingMs()));
-  if (!finished)
-    process.kill();
-  drain();
-  return {std::move(output), process.readAllStandardError(),
-          finished ? process.exitCode() : -1, finished};
-}
-
 bool copyToWaylandClipboard(const QString &mimeType, const QByteArray &payload,
                             QString &error) {
   QByteArray lastError;
@@ -203,11 +159,6 @@ bool copyToWaylandClipboard(const QString &mimeType, const QByteArray &payload,
 QString runtimePath(const QString &name) {
   const QString runtime = secureRuntimeDirectory();
   return runtime.isEmpty() ? QString() : QDir(runtime).filePath(name);
-}
-
-QString shellQuote(QString value) {
-  value.replace('\'', QStringLiteral("'\"'\"'"));
-  return QStringLiteral("'%1'").arg(value);
 }
 
 QString screenshotTargetPath(QString &error) {
@@ -777,7 +728,7 @@ bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
   }
 
   // Window discovery is independent of the screen grab, so let the hyprctl
-  // round trip overlap grim instead of running after it.
+  // round trip overlap the in-process output capture.
   QProcess clients;
   if (includeWindows) {
     clients.setProcessChannelMode(QProcess::SeparateChannels);
@@ -786,38 +737,17 @@ bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
     clients.closeWriteChannel();
   }
 
-  const QString grimGeometry = QStringLiteral("%1,%2 %3x%4")
-                                   .arg(geometry.x())
-                                   .arg(geometry.y())
-                                   .arg(geometry.width())
-                                   .arg(geometry.height());
-  // A PPM frame is three bytes per pixel plus a short header.
-  const qsizetype expectedBytes =
-      static_cast<qsizetype>(capture.monitor.pixelSize.width()) *
-          capture.monitor.pixelSize.height() * 3 +
-      64;
-  const ProcessResult grim = runStreamingProcess(
-      QStringLiteral("grim"),
-      {QStringLiteral("-t"), QStringLiteral("ppm"), QStringLiteral("-s"),
-       QString::number(capture.monitor.scale, 'g', 8), QStringLiteral("-g"),
-       grimGeometry, QStringLiteral("-")},
-      expectedBytes, 10000);
-
-  if (!grim.finished || grim.exitCode != 0) {
-    QString detail = QString::fromUtf8(grim.error).trimmed();
-    if (detail.isEmpty()) {
-      detail = grim.finished ? QStringLiteral("grim exited with code %1")
-                                   .arg(grim.exitCode)
-                             : QStringLiteral("grim did not finish in time");
+  const QString testCapture = qEnvironmentVariable("OMASNAP_TEST_CAPTURE");
+  if (!testCapture.isEmpty()) {
+    if (!capture.source.load(testCapture)) {
+      error = QStringLiteral("Screen capture failed: could not load test "
+                             "capture %1")
+                  .arg(testCapture);
+      return false;
     }
-    error = QStringLiteral("Screen capture failed: %1").arg(detail);
-    return false;
-  }
-  if (!capture.source.loadFromData(grim.output, "PPM")) {
-    error = QStringLiteral(
-                "Screen capture failed: could not decode %1 bytes of PPM data "
-                "from grim")
-                .arg(grim.output.size());
+  } else if (!captureOutputSurface(monitor, capture.source, error)) {
+    if (!error.startsWith(QStringLiteral("Screen capture failed:")))
+      error = QStringLiteral("Screen capture failed: %1").arg(error);
     return false;
   }
 
@@ -1092,6 +1022,18 @@ QString temporarySnapshotPath() {
                          .arg(nonce, 8, 16, QChar('0')));
 }
 
+QString temporaryExportPath() {
+  return runtimePath(QStringLiteral("export-%1-%2.png")
+                         .arg(QCoreApplication::applicationPid())
+                         .arg(QRandomGenerator::global()->generate64(), 16, 16,
+                              QChar('0')));
+}
+
+QString operationLogPath(const QString &imagePath) {
+  const QFileInfo info(imagePath);
+  return info.dir().filePath(info.completeBaseName() + QStringLiteral(".json"));
+}
+
 QString pinnedSnapshotPath(int index) {
   // A fresh nonce prevents collisions when the editor PID is recycled.
   return runtimePath(QStringLiteral("pin-%1-%2-%3.png")
@@ -1163,6 +1105,391 @@ bool saveTemporarySnapshot(const QImage &image, QString path, QString &error,
   return true;
 }
 
+namespace {
+QJsonArray pointArray(const QPointF &point) {
+  return QJsonArray{point.x(), point.y()};
+}
+
+QJsonArray rectArray(const QRectF &rect) {
+  return QJsonArray{rect.x(), rect.y(), rect.width(), rect.height()};
+}
+
+QPointF pointFromArray(const QJsonValue &value) {
+  const QJsonArray array = value.toArray();
+  if (array.size() < 2)
+    return {};
+  return {array.at(0).toDouble(), array.at(1).toDouble()};
+}
+
+QRectF rectFromArray(const QJsonValue &value) {
+  const QJsonArray array = value.toArray();
+  if (array.size() < 4)
+    return {};
+  return {array.at(0).toDouble(), array.at(1).toDouble(), array.at(2).toDouble(),
+          array.at(3).toDouble()};
+}
+
+QString annotationToolName(Annotation::Kind kind) {
+  switch (kind) {
+  case Annotation::Kind::Arrow:
+    return QStringLiteral("arrow");
+  case Annotation::Kind::Line:
+    return QStringLiteral("line");
+  case Annotation::Kind::Freehand:
+    return QStringLiteral("freehand");
+  case Annotation::Kind::Highlighter:
+    return QStringLiteral("highlighter");
+  case Annotation::Kind::Marker:
+    return QStringLiteral("marker");
+  case Annotation::Kind::Rectangle:
+    return QStringLiteral("rectangle");
+  case Annotation::Kind::Ellipse:
+    return QStringLiteral("ellipse");
+  case Annotation::Kind::Text:
+    return QStringLiteral("text");
+  case Annotation::Kind::Redaction:
+    return QStringLiteral("redaction");
+  case Annotation::Kind::Spotlight:
+    return QStringLiteral("spotlight");
+  }
+  return QStringLiteral("arrow");
+}
+
+bool annotationKindFromName(const QString &name, Annotation::Kind &kind) {
+  if (name == QStringLiteral("arrow"))
+    kind = Annotation::Kind::Arrow;
+  else if (name == QStringLiteral("line"))
+    kind = Annotation::Kind::Line;
+  else if (name == QStringLiteral("freehand"))
+    kind = Annotation::Kind::Freehand;
+  else if (name == QStringLiteral("highlighter"))
+    kind = Annotation::Kind::Highlighter;
+  else if (name == QStringLiteral("marker"))
+    kind = Annotation::Kind::Marker;
+  else if (name == QStringLiteral("rectangle"))
+    kind = Annotation::Kind::Rectangle;
+  else if (name == QStringLiteral("ellipse"))
+    kind = Annotation::Kind::Ellipse;
+  else if (name == QStringLiteral("text"))
+    kind = Annotation::Kind::Text;
+  else if (name == QStringLiteral("redaction"))
+    kind = Annotation::Kind::Redaction;
+  else if (name == QStringLiteral("spotlight"))
+    kind = Annotation::Kind::Spotlight;
+  else
+    return false;
+  return true;
+}
+
+QString backgroundStyleName(BackgroundStyle style) {
+  switch (style) {
+  case BackgroundStyle::None:
+    return QStringLiteral("none");
+  case BackgroundStyle::Aurora:
+    return QStringLiteral("aurora");
+  case BackgroundStyle::Sunset:
+    return QStringLiteral("sunset");
+  case BackgroundStyle::Lagoon:
+    return QStringLiteral("lagoon");
+  case BackgroundStyle::Violet:
+    return QStringLiteral("violet");
+  }
+  return QStringLiteral("none");
+}
+
+bool backgroundStyleFromName(const QString &name, BackgroundStyle &style) {
+  if (name == QStringLiteral("none"))
+    style = BackgroundStyle::None;
+  else if (name == QStringLiteral("aurora"))
+    style = BackgroundStyle::Aurora;
+  else if (name == QStringLiteral("sunset"))
+    style = BackgroundStyle::Sunset;
+  else if (name == QStringLiteral("lagoon"))
+    style = BackgroundStyle::Lagoon;
+  else if (name == QStringLiteral("violet"))
+    style = BackgroundStyle::Violet;
+  else
+    return false;
+  return true;
+}
+
+QJsonObject annotationToJson(const Annotation &annotation) {
+  QJsonObject object;
+  object.insert(QStringLiteral("id"), QString::number(annotation.id));
+  object.insert(QStringLiteral("tool"), annotationToolName(annotation.kind));
+  object.insert(QStringLiteral("start"), pointArray(annotation.start));
+  object.insert(QStringLiteral("end"), pointArray(annotation.end));
+  object.insert(QStringLiteral("color"),
+                annotation.color.name(QColor::HexArgb));
+  object.insert(QStringLiteral("size"), annotation.size);
+  if (!annotation.text.isEmpty())
+    object.insert(QStringLiteral("text"), annotation.text);
+  if (annotation.number > 0)
+    object.insert(QStringLiteral("number"), annotation.number);
+  if (!annotation.points.isEmpty()) {
+    QJsonArray points;
+    for (const QPointF &point : annotation.points)
+      points.push_back(pointArray(point));
+    object.insert(QStringLiteral("points"), points);
+  }
+  if (annotation.kind == Annotation::Kind::Redaction) {
+    object.insert(QStringLiteral("redactionStyle"),
+                  annotation.redactionStyle == RedactionStyle::Solid
+                      ? QStringLiteral("solid")
+                      : QStringLiteral("pixelate"));
+    object.insert(QStringLiteral("seed"),
+                  QString::number(annotation.redactionSeed));
+  }
+  if (annotation.filled)
+    object.insert(QStringLiteral("filled"), true);
+  if (annotation.cornerRadius > 0.0)
+    object.insert(QStringLiteral("cornerRadius"), annotation.cornerRadius);
+  if (annotation.textBackground != TextBackground::Pill)
+    object.insert(QStringLiteral("textBackground"), QStringLiteral("plain"));
+  if (annotation.kind == Annotation::Kind::Spotlight) {
+    object.insert(QStringLiteral("magnification"), annotation.magnification);
+    object.insert(QStringLiteral("spotlightShape"),
+                  annotation.spotlightShape == SpotlightShape::Rectangle
+                      ? QStringLiteral("rectangle")
+                      : annotation.spotlightShape ==
+                                SpotlightShape::RoundedRectangle
+                            ? QStringLiteral("rounded")
+                            : QStringLiteral("ellipse"));
+  }
+  return object;
+}
+
+bool annotationFromJson(const QJsonObject &object, Annotation &annotation,
+                        QString &error) {
+  if (!annotationKindFromName(object.value(QStringLiteral("tool")).toString(),
+                              annotation.kind)) {
+    error = QStringLiteral("Operation log has an unknown annotation tool");
+    return false;
+  }
+  annotation.id =
+      object.value(QStringLiteral("id")).toString().toULongLong();
+  annotation.start = pointFromArray(object.value(QStringLiteral("start")));
+  annotation.end = pointFromArray(object.value(QStringLiteral("end")));
+  annotation.color = QColor(object.value(QStringLiteral("color")).toString());
+  annotation.size = object.value(QStringLiteral("size")).toDouble(4.0);
+  annotation.text = object.value(QStringLiteral("text")).toString();
+  annotation.number = object.value(QStringLiteral("number")).toInt();
+  annotation.points.clear();
+  for (const QJsonValue point : object.value(QStringLiteral("points")).toArray())
+    annotation.points.push_back(pointFromArray(point));
+  const QString redactionStyle =
+      object.value(QStringLiteral("redactionStyle")).toString();
+  annotation.redactionStyle = redactionStyle == QStringLiteral("solid")
+                                  ? RedactionStyle::Solid
+                                  : RedactionStyle::Pixelate;
+  annotation.redactionSeed =
+      object.value(QStringLiteral("seed")).toString().toUInt();
+  annotation.filled = object.value(QStringLiteral("filled")).toBool(false);
+  annotation.cornerRadius =
+      object.value(QStringLiteral("cornerRadius")).toDouble(0.0);
+  annotation.textBackground =
+      object.value(QStringLiteral("textBackground")).toString() ==
+              QStringLiteral("plain")
+          ? TextBackground::Plain
+          : TextBackground::Pill;
+  annotation.magnification =
+      object.value(QStringLiteral("magnification")).toDouble(2.0);
+  const QString spotlightShape =
+      object.value(QStringLiteral("spotlightShape")).toString();
+  annotation.spotlightShape =
+      spotlightShape == QStringLiteral("rectangle")
+          ? SpotlightShape::Rectangle
+          : spotlightShape == QStringLiteral("rounded")
+                ? SpotlightShape::RoundedRectangle
+                : SpotlightShape::Ellipse;
+  return true;
+}
+
+QJsonObject operationToJson(const Operation &operation) {
+  QJsonObject object;
+  switch (operation.type) {
+  case Operation::Type::Crop:
+    object.insert(QStringLiteral("type"), QStringLiteral("crop"));
+    object.insert(QStringLiteral("rect"), rectArray(operation.crop));
+    break;
+  case Operation::Type::Background:
+    object.insert(QStringLiteral("type"), QStringLiteral("background"));
+    object.insert(QStringLiteral("style"),
+                  backgroundStyleName(operation.background));
+    break;
+  case Operation::Type::Annotate:
+    object.insert(QStringLiteral("type"), QStringLiteral("annotate"));
+    if (!operation.annotations.isEmpty())
+      object.insert(QStringLiteral("annotation"),
+                    annotationToJson(operation.annotations.constFirst()));
+    break;
+  case Operation::Type::Patch: {
+    object.insert(QStringLiteral("type"), QStringLiteral("patch"));
+    QJsonArray annotations;
+    for (const Annotation &annotation : operation.annotations)
+      annotations.push_back(annotationToJson(annotation));
+    object.insert(QStringLiteral("annotations"), annotations);
+    break;
+  }
+  case Operation::Type::Delete: {
+    object.insert(QStringLiteral("type"), QStringLiteral("delete"));
+    QJsonArray ids;
+    for (const quint64 id : operation.ids)
+      ids.push_back(QString::number(id));
+    object.insert(QStringLiteral("ids"), ids);
+    break;
+  }
+  case Operation::Type::Cut:
+    object.insert(QStringLiteral("type"), QStringLiteral("cut"));
+    object.insert(QStringLiteral("orientation"),
+                  operation.cut.orientation == Qt::Horizontal
+                      ? QStringLiteral("horizontal")
+                      : QStringLiteral("vertical"));
+    object.insert(QStringLiteral("sourceStart"), operation.cut.sourceStart);
+    object.insert(QStringLiteral("sourceEnd"), operation.cut.sourceEnd);
+    object.insert(QStringLiteral("logicalStart"), operation.cut.logicalStart);
+    object.insert(QStringLiteral("logicalEnd"), operation.cut.logicalEnd);
+    break;
+  }
+  return object;
+}
+
+bool operationFromJson(const QJsonObject &object, Operation &operation,
+                       QString &error) {
+  const QString type = object.value(QStringLiteral("type")).toString();
+  if (type == QStringLiteral("crop")) {
+    operation.type = Operation::Type::Crop;
+    operation.crop = rectFromArray(object.value(QStringLiteral("rect")));
+    return true;
+  }
+  if (type == QStringLiteral("background")) {
+    operation.type = Operation::Type::Background;
+    if (!backgroundStyleFromName(object.value(QStringLiteral("style")).toString(),
+                                 operation.background)) {
+      error = QStringLiteral("Operation log has an unknown background style");
+      return false;
+    }
+    return true;
+  }
+  if (type == QStringLiteral("annotate")) {
+    operation.type = Operation::Type::Annotate;
+    Annotation annotation;
+    if (!annotationFromJson(object.value(QStringLiteral("annotation")).toObject(),
+                            annotation, error))
+      return false;
+    operation.annotations = {annotation};
+    return true;
+  }
+  if (type == QStringLiteral("patch")) {
+    operation.type = Operation::Type::Patch;
+    for (const QJsonValue value :
+         object.value(QStringLiteral("annotations")).toArray()) {
+      Annotation annotation;
+      if (!annotationFromJson(value.toObject(), annotation, error))
+        return false;
+      operation.annotations.push_back(annotation);
+    }
+    return true;
+  }
+  if (type == QStringLiteral("delete")) {
+    operation.type = Operation::Type::Delete;
+    for (const QJsonValue value : object.value(QStringLiteral("ids")).toArray())
+      operation.ids.push_back(value.toString().toULongLong());
+    return true;
+  }
+  if (type == QStringLiteral("cut")) {
+    operation.type = Operation::Type::Cut;
+    const QString orientation =
+        object.value(QStringLiteral("orientation")).toString();
+    operation.cut.orientation = orientation == QStringLiteral("vertical")
+                                    ? Qt::Vertical
+                                    : Qt::Horizontal;
+    operation.cut.sourceStart =
+        object.value(QStringLiteral("sourceStart")).toInt();
+    operation.cut.sourceEnd = object.value(QStringLiteral("sourceEnd")).toInt();
+    operation.cut.logicalStart =
+        object.value(QStringLiteral("logicalStart")).toInt();
+    operation.cut.logicalEnd =
+        object.value(QStringLiteral("logicalEnd")).toInt();
+    return true;
+  }
+  error = QStringLiteral("Operation log has an unknown operation type");
+  return false;
+}
+
+} // namespace
+
+bool saveOperationLog(const QString &path, const OperationLog &log,
+                      QString &error) {
+  if (path.isEmpty()) {
+    error = QStringLiteral("Operation log path is empty");
+    return false;
+  }
+  QJsonArray ops;
+  for (const Operation &operation : log.ops)
+    ops.push_back(operationToJson(operation));
+  QJsonObject root;
+  root.insert(QStringLiteral("version"), 1);
+  root.insert(QStringLiteral("index"), log.index);
+  root.insert(QStringLiteral("nextId"), QString::number(log.nextId));
+  root.insert(QStringLiteral("nextMarker"), log.nextMarker);
+  root.insert(QStringLiteral("ops"), ops);
+
+  QSaveFile file(path);
+  file.setDirectWriteFallback(false);
+  if (!file.open(QIODevice::WriteOnly) ||
+      !file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+    error = QStringLiteral("Could not open operation log: %1")
+                .arg(file.errorString());
+    return false;
+  }
+  file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+  file.putChar('\n');
+  if (!file.commit()) {
+    error = QStringLiteral("Could not write operation log: %1")
+                .arg(file.errorString());
+    return false;
+  }
+  return true;
+}
+
+bool loadOperationLog(const QString &path, OperationLog &log, QString &error) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    error = QStringLiteral("Could not read operation log: %1").arg(path);
+    return false;
+  }
+  QJsonParseError parseError;
+  const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+    error = QStringLiteral("Could not parse operation log: %1")
+                .arg(parseError.errorString());
+    return false;
+  }
+  const QJsonObject root = document.object();
+  if (root.value(QStringLiteral("version")).toInt() != 1) {
+    error = QStringLiteral("Unsupported operation log version");
+    return false;
+  }
+  OperationLog loaded;
+  loaded.index = root.value(QStringLiteral("index")).toInt();
+  loaded.nextId = root.value(QStringLiteral("nextId")).toString().toULongLong();
+  loaded.nextMarker = root.value(QStringLiteral("nextMarker")).toInt(1);
+  if (loaded.nextId == 0)
+    loaded.nextId = 1;
+  if (loaded.nextMarker < 1)
+    loaded.nextMarker = 1;
+  for (const QJsonValue value : root.value(QStringLiteral("ops")).toArray()) {
+    Operation operation;
+    if (!operationFromJson(value.toObject(), operation, error))
+      return false;
+    loaded.ops.push_back(std::move(operation));
+  }
+  loaded.index = std::clamp(loaded.index, 0, static_cast<int>(loaded.ops.size()));
+  log = std::move(loaded);
+  return true;
+}
+
 bool copyTextToClipboard(const QString &text, QString &error) {
   if (text.isEmpty()) {
     error = QStringLiteral("No text found in selection");
@@ -1203,6 +1530,11 @@ QString recognizeText(const QImage &image, QString &error) {
   if (text.isEmpty())
     error = QStringLiteral("No text found in selection");
   return text;
+}
+
+QString shellQuote(QString value) {
+  value.replace('\'', QStringLiteral("'\"'\"'"));
+  return QStringLiteral("'%1'").arg(value);
 }
 
 void sendCaptureNotification(const QString &message, const QString &imagePath) {

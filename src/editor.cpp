@@ -365,16 +365,33 @@ void drawMeasureBadge(QPainter &painter, const QRect &bounds,
 
 void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
                       const QPointF &cursor,
-                      const QVector<QPair<QString, QString>> &entries) {
+                      const QVector<QPair<QString, QString>> &entries,
+                      const QVector<QPointF> &keepVisible = {}) {
   if (entries.isEmpty())
     return;
   constexpr int columns = 2;
   const int rows = (entries.size() + columns - 1) / columns;
   const qreal width = 414;
   const qreal height = rows * 19 + 24;
-  QRectF panel(bounds.width() - width - 14, 14, width, height);
-  if (panel.adjusted(-28, -28, 28, 28).contains(cursor))
-    panel.moveLeft(14);
+  const QRectF right(bounds.width() - width - 14, 14, width, height);
+  const QRectF left(14, 14, width, height);
+  auto hiddenCount = [&](const QRectF &candidate) {
+    int count = 0;
+    for (const QPointF &point : keepVisible) {
+      if (candidate.contains(point))
+        ++count;
+    }
+    return count;
+  };
+  // Flip away from the pointer, but not onto a selected handle. Adding Cut
+  // grew the card far enough that a line-select click near mid-canvas moved
+  // it over the start handle.
+  const bool cursorWantsLeft =
+      right.adjusted(-28, -28, 28, 28).contains(cursor);
+  QRectF panel = cursorWantsLeft ? left : right;
+  const QRectF other = cursorWantsLeft ? right : left;
+  if (hiddenCount(panel) > hiddenCount(other))
+    panel = other;
 
   painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
   painter.setBrush(QColor(13, 15, 20, 224));
@@ -448,13 +465,20 @@ QPointF centeredCreationStart(CaptureEditor::Tool tool, const QPointF &center,
 }
 
 CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
-                             QuickOutputMode quickOutput, QWidget *parent)
+                             QuickOutputMode quickOutput, OperationLog log,
+                             QWidget *parent)
     : QWidget(parent), capture_(std::move(capture)),
       quickOutputMode_(quickOutput) {
   pristineSource_ = capture_.source;
   pristineLogicalSize_ = capture_.previewSize;
   paletteConfig_ = loadPaletteConfig(defaultPaletteConfigPath());
   customColor_ = paletteConfig_.custom;
+  if (!log.ops.isEmpty()) {
+    ops_ = std::move(log.ops);
+    opIndex_ = std::clamp(log.index, 0, static_cast<int>(ops_.size()));
+    nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
+    nextMarker_ = std::max(log.nextMarker, 1);
+  }
   setWindowTitle(QStringLiteral("Omasnap"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
                  Qt::WindowStaysOnTopHint);
@@ -497,7 +521,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   nudgePersistTimer_.setSingleShot(true);
   nudgePersistTimer_.setInterval(kNudgeCoalesceMs);
   connect(&nudgePersistTimer_, &QTimer::timeout, this,
-          [this] { scheduleSnapshot(); });
+          [this] { endNudgeRun(); });
   connect(
       textEditor_, &QLineEdit::textChanged, this, [this](const QString &text) {
         const QFontMetrics metrics(textEditor_->font());
@@ -530,6 +554,8 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   connect(&snapshotWatcher_, &QFutureWatcher<bool>::finished, this, [this] {
     snapshotBusy_ = false;
     snapshotWriteOk_ = snapshotWatcher_.result();
+    if (snapshotWriteOk_ && QFile::exists(snapshotPath_))
+      sourceWritten_ = true;
     // Don't chain a re-render while a cut drag is live: capture_ is
     // transiently composed with liveCut_ mid-drag, and copying it here would
     // persist a phantom cut into the crash-recovery snapshot. snapshotDirty_
@@ -580,28 +606,6 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
             emit captureReady(true, {});
           });
 
-  connect(&windowWatcher_, &QFutureWatcher<WindowJob>::finished, this, [this] {
-    windowPending_ = false;
-    const WindowJob job = windowWatcher_.result();
-    if (!job.ok) {
-      setStatus(QStringLiteral("Window capture failed · %1 · choose another")
-                    .arg(job.error));
-      update();
-      return;
-    }
-    capture_.source = job.image;
-    capture_.previewSize = job.scaledSize;
-    pristineSource_ = capture_.source;
-    pristineLogicalSize_ = capture_.previewSize;
-    cuts_.clear();
-    selection_ = QRectF(QPointF(), job.scaledSize);
-    redactionBaseStale_ = true;
-    windowMode_ = false;
-    enterEdit(QStringLiteral(
-        "Window selected · Select moves layers · wheel zooms · outer handles "
-        "crop"));
-  });
-
   connect(&pinWatcher_, &QFutureWatcher<QImage>::finished, this, [this] {
     pinPending_ = false;
     const QString path = pendingPinPath_;
@@ -631,7 +635,10 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     pendingMode_ = mode;
     setStatus(QStringLiteral("Capturing screen…"));
   } else if (mode == CaptureMode::Fullscreen || mode == CaptureMode::File) {
-    selection_ = QRectF(QPointF(), capture_.previewSize);
+    if (ops_.isEmpty())
+      selection_ = QRectF(QPointF(), capture_.previewSize);
+    else
+      replayLog();
     enterEdit(
         mode == CaptureMode::File
             ? QStringLiteral("Editing image from file · Copy/Save to output")
@@ -651,11 +658,15 @@ CaptureEditor::~CaptureEditor() {
   // current render (dropping any coalesced follow-up) before cleanup.
   snapshotDirty_ = false;
   waitForSnapshot();
-  if (snapshotPath_.isEmpty() || !QFile::exists(snapshotPath_))
-    return;
   const QString runtime = secureRuntimeDirectory();
-  if (!runtime.isEmpty() && QFileInfo(snapshotPath_).absolutePath() == runtime)
-    QFile::remove(snapshotPath_);
+  const auto removeWorking = [&](const QString &path) {
+    if (path.isEmpty() || !QFile::exists(path))
+      return;
+    if (!runtime.isEmpty() && QFileInfo(path).absolutePath() == runtime)
+      QFile::remove(path);
+  };
+  removeWorking(snapshotPath_);
+  removeWorking(workingLogPath());
 }
 
 bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
@@ -1043,34 +1054,35 @@ void CaptureEditor::duplicateSelectedAnnotation() {
   if (dragging_ || textEditor_->isVisible() || selectedAnnotation_ < 0 ||
       selectedAnnotation_ >= annotations_.size())
     return;
-  recordEdit();
+  endNudgeRun();
   Annotation copy = annotations_.at(selectedAnnotation_);
+  copy.id = 0;
   translateAnnotation(
       copy, duplicateOffset(annotationBounds(copy), selection_.size()));
   if (copy.kind == Annotation::Kind::Marker)
-    copy.number = nextMarker_++;
+    copy.number = nextMarker_;
   if (copy.kind == Annotation::Kind::Redaction) {
     // A copy must not share the original's mosaic; give it its own seed.
     copy.redactionSeed = freshRedactionSeed();
   }
-  annotations_.push_back(std::move(copy));
-  selectedAnnotation_ = annotations_.size() - 1;
-  selectedAnnotations_ = {selectedAnnotation_};
+  commitAnnotate(std::move(copy));
+  if (!annotations_.isEmpty()) {
+    selectedAnnotation_ = annotations_.size() - 1;
+    selectedAnnotations_ = {selectedAnnotation_};
+  }
   setStatus(QStringLiteral("Duplicated · Alt+D again offsets further"));
-  scheduleSnapshot();
 }
 
 void CaptureEditor::scaleSelectedAnnotation(qreal factor) {
   if (selectedAnnotation_ < 0 || selectedAnnotation_ >= annotations_.size())
     return;
-  recordEdit();
   Annotation &annotation = annotations_[selectedAnnotation_];
   if (annotation.kind == Annotation::Kind::Spotlight) {
     annotation.magnification =
         std::clamp(annotation.magnification * factor, 1.0, 4.0);
     setStatus(QStringLiteral("Spotlight magnification · %1× · wheel adjusts")
                   .arg(annotation.magnification, 0, 'f', 1));
-    scheduleSnapshot();
+    commitPatch({selectedAnnotation_});
     return;
   }
   const QPointF center = annotationBounds(annotation).center();
@@ -1106,7 +1118,7 @@ void CaptureEditor::scaleSelectedAnnotation(qreal factor) {
   }
   setStatus(QStringLiteral("Selected layer · wheel zoom %1%")
                 .arg(qRound(factor * 100)));
-  scheduleSnapshot();
+  commitPatch({selectedAnnotation_});
 }
 
 QLineF CaptureEditor::creationSpan(const QPointF &rawEnd) const {
@@ -1132,14 +1144,13 @@ void CaptureEditor::toggleShapeFill() {
 void CaptureEditor::toggleTextBackground() {
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
       annotations_.at(selectedAnnotation_).kind == Annotation::Kind::Text) {
-    recordEdit();
     Annotation &text = annotations_[selectedAnnotation_];
     text.textBackground = text.textBackground == TextBackground::Pill
                               ? TextBackground::Plain
                               : TextBackground::Pill;
     setStatus(QStringLiteral("Selected text: %1 · T again toggles")
                   .arg(textBackgroundName(text.textBackground).toLower()));
-    scheduleSnapshot();
+    commitPatch({selectedAnnotation_});
     return;
   }
   textBackground_ = textBackground_ == TextBackground::Pill
@@ -1173,7 +1184,7 @@ void CaptureEditor::nudgeSelectedAnnotation(const QPointF &delta) {
   // Presses in quick succession (a held key) share one undo entry and one
   // deferred snapshot.
   if (!nudgeTimer_.isValid() || nudgeTimer_.elapsed() > kNudgeCoalesceMs)
-    recordEdit();
+    endNudgeRun();
   nudgeTimer_.restart();
   translateAnnotation(annotations_[selectedAnnotation_], delta);
   setStatus(QStringLiteral("Nudged · arrows move 1 px · Shift 10 px"));
@@ -1181,11 +1192,13 @@ void CaptureEditor::nudgeSelectedAnnotation(const QPointF &delta) {
 }
 
 void CaptureEditor::endNudgeRun() {
+  const bool hadRun = nudgeTimer_.isValid();
   nudgeTimer_.invalidate();
-  if (nudgePersistTimer_.isActive()) {
+  if (nudgePersistTimer_.isActive())
     nudgePersistTimer_.stop();
-    scheduleSnapshot();
-  }
+  if (hadRun && selectedAnnotation_ >= 0 &&
+      selectedAnnotation_ < annotations_.size())
+    commitPatch({selectedAnnotation_});
 }
 
 QRectF CaptureEditor::colorPaletteRect() const {
@@ -1248,9 +1261,8 @@ void CaptureEditor::applyCustomColor(const QPointF &position) {
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
       annotations_.at(selectedAnnotation_).kind !=
           Annotation::Kind::Redaction) {
-    recordEdit();
     annotations_[selectedAnnotation_].color = customColor_;
-    scheduleSnapshot();
+    commitPatch({selectedAnnotation_});
   }
   update();
 }
@@ -1600,7 +1612,7 @@ void CaptureEditor::applyEditState(const EditState &state) {
 
 void CaptureEditor::cancelActiveDragForHistory() {
   if (dragStartStateValid_)
-    applyEditState(dragStartState_);
+    replayLog();
   dragging_ = false;
   creationConstraintActive_ = false;
   creationCenteredActive_ = false;
@@ -1615,27 +1627,221 @@ void CaptureEditor::cancelActiveDragForHistory() {
   }
 }
 
-void CaptureEditor::pushUndoState(const EditState &state) {
-  // Any other edit ends a run of coalesced nudges.
-  endNudgeRun();
-  undoStack_.push_back(state);
-  constexpr qsizetype maximumUndoStates = 100;
-  while (undoStack_.size() > maximumUndoStates)
-    undoStack_.removeFirst();
-  redoStack_.clear();
+QString CaptureEditor::workingLogPath() const {
+  return snapshotPath_.isEmpty() ? QString() : operationLogPath(snapshotPath_);
 }
 
-void CaptureEditor::recordEdit() { pushUndoState(editState()); }
+bool CaptureEditor::restoreOperationLog(const QString &path, QString &error) {
+  OperationLog log;
+  if (!loadOperationLog(path, log, error))
+    return false;
+  ops_ = std::move(log.ops);
+  opIndex_ = std::clamp(log.index, 0, static_cast<int>(ops_.size()));
+  nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
+  nextMarker_ = std::max(log.nextMarker, 1);
+  replayLog();
+  phase_ = Phase::Edit;
+  scheduleSnapshot();
+  return true;
+}
+
+void CaptureEditor::commitOp(Operation op) {
+  if (opIndex_ < ops_.size())
+    ops_.resize(opIndex_);
+  ops_.push_back(std::move(op));
+  constexpr qsizetype maximumOps = 100;
+  while (ops_.size() > maximumOps) {
+    // Replay starts at the full monitor; the first Crop is the selected
+    // region/window. Dropping it leaves annotations in cropped space.
+    if (ops_.constFirst().type == Operation::Type::Crop)
+      ops_.removeAt(1);
+    else
+      ops_.removeFirst();
+    if (opIndex_ > 0)
+      --opIndex_;
+  }
+  opIndex_ = ops_.size();
+  replayLog();
+  scheduleSnapshot();
+}
+
+void CaptureEditor::commitAnnotate(Annotation annotation) {
+  if (annotation.id == 0)
+    annotation.id = nextAnnotationId_++;
+  Operation op;
+  op.type = Operation::Type::Annotate;
+  op.annotations = {std::move(annotation)};
+  commitOp(std::move(op));
+}
+
+void CaptureEditor::commitPatch(const QVector<int> &indices) {
+  Operation op;
+  op.type = Operation::Type::Patch;
+  for (const int index : indices) {
+    if (index < 0 || index >= annotations_.size())
+      continue;
+    Annotation annotation = annotations_.at(index);
+    if (annotation.id == 0)
+      annotation.id = nextAnnotationId_++;
+    op.annotations.push_back(std::move(annotation));
+  }
+  if (op.annotations.isEmpty())
+    return;
+  commitOp(std::move(op));
+}
+
+void CaptureEditor::commitDelete(const QVector<int> &indices) {
+  Operation op;
+  op.type = Operation::Type::Delete;
+  for (const int index : indices) {
+    if (index >= 0 && index < annotations_.size() &&
+        annotations_.at(index).id != 0)
+      op.ids.push_back(annotations_.at(index).id);
+  }
+  if (op.ids.isEmpty())
+    return;
+  commitOp(std::move(op));
+}
+
+void CaptureEditor::commitCrop(const QRectF &crop) {
+  Operation op;
+  op.type = Operation::Type::Crop;
+  op.crop = crop;
+  commitOp(std::move(op));
+}
+
+void CaptureEditor::commitCut(CutOp cut) {
+  Operation op;
+  op.type = Operation::Type::Cut;
+  op.cut = std::move(cut);
+  commitOp(std::move(op));
+}
+
+void CaptureEditor::commitBackground(BackgroundStyle style) {
+  Operation op;
+  op.type = Operation::Type::Background;
+  op.background = style;
+  commitOp(std::move(op));
+}
+
+void CaptureEditor::replayLog() {
+  QVector<quint64> selectedIds;
+  for (const int index : selectedAnnotations_) {
+    if (index >= 0 && index < annotations_.size() &&
+        annotations_.at(index).id != 0)
+      selectedIds.push_back(annotations_.at(index).id);
+  }
+  const quint64 selectedId =
+      selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size()
+          ? annotations_.at(selectedAnnotation_).id
+          : 0;
+
+  const QSize startSize =
+      pristineLogicalSize_.isEmpty() ? capture_.previewSize
+                                     : pristineLogicalSize_;
+  QRectF selection{QPointF(), QSizeF(startSize)};
+  BackgroundStyle background = BackgroundStyle::None;
+  QVector<Annotation> annotations;
+  QVector<CutOp> cuts;
+  int nextMarker = 1;
+  for (int index = 0; index < opIndex_ && index < ops_.size(); ++index) {
+    const Operation &op = ops_.at(index);
+    switch (op.type) {
+    case Operation::Type::Crop:
+      selection = op.crop;
+      break;
+    case Operation::Type::Background:
+      background = op.background;
+      break;
+    case Operation::Type::Annotate:
+      for (const Annotation &annotation : op.annotations)
+        annotations.push_back(annotation);
+      break;
+    case Operation::Type::Patch:
+      for (const Annotation &annotation : op.annotations) {
+        const auto match = std::ranges::find_if(
+            annotations, [&](const Annotation &current) {
+              return current.id != 0 && current.id == annotation.id;
+            });
+        if (match != annotations.end())
+          *match = annotation;
+      }
+      break;
+    case Operation::Type::Delete:
+      annotations.erase(std::remove_if(annotations.begin(), annotations.end(),
+                                       [&](const Annotation &annotation) {
+                                         return op.ids.contains(annotation.id);
+                                       }),
+                        annotations.end());
+      break;
+    case Operation::Type::Cut: {
+      const bool horizontal = op.cut.orientation == Qt::Horizontal;
+      const qreal lo = op.cut.logicalStart;
+      const qreal hi = op.cut.logicalEnd;
+      const qreal band = hi - lo;
+      for (Annotation &annotation : annotations) {
+        auto shift = [&](QPointF &point) {
+          if (horizontal)
+            point.setY(shiftForCut(point.y(), lo, hi));
+          else
+            point.setX(shiftForCut(point.x(), lo, hi));
+        };
+        shift(annotation.start);
+        shift(annotation.end);
+        for (QPointF &point : annotation.points)
+          shift(point);
+      }
+      if (band > 0.0) {
+        if (horizontal)
+          selection.setHeight(std::max<qreal>(1.0, selection.height() - band));
+        else
+          selection.setWidth(std::max<qreal>(1.0, selection.width() - band));
+      }
+      cuts.push_back(op.cut);
+      break;
+    }
+    }
+  }
+
+  annotations_ = std::move(annotations);
+  backgroundStyle_ = background;
+  if (cuts != cuts_) {
+    cuts_ = std::move(cuts);
+    refreshComposedCapture();
+  }
+  if (!selection.isEmpty())
+    selection_ = selection;
+  nextMarker = 1;
+  for (const Annotation &annotation : annotations_) {
+    if (annotation.kind == Annotation::Kind::Marker)
+      nextMarker = std::max(nextMarker, annotation.number + 1);
+  }
+  nextMarker_ = nextMarker;
+  selectedAnnotations_.clear();
+  selectedAnnotation_ = -1;
+  for (int index = 0; index < annotations_.size(); ++index) {
+    if (selectedIds.contains(annotations_.at(index).id))
+      selectedAnnotations_.push_back(index);
+    if (selectedId != 0 && annotations_.at(index).id == selectedId)
+      selectedAnnotation_ = index;
+  }
+  if (selectedAnnotation_ < 0 && !selectedAnnotations_.isEmpty())
+    selectedAnnotation_ = selectedAnnotations_.constLast();
+  editingAnnotation_ = -1;
+  redactionBaseStale_ = true;
+  updatePointerCursor();
+  update();
+}
 
 void CaptureEditor::undoEdit() {
   endNudgeRun();
   cancelActiveDragForHistory();
-  if (undoStack_.isEmpty()) {
+  if (opIndex_ <= 0) {
     setStatus(QStringLiteral("Nothing to undo"));
     return;
   }
-  redoStack_.push_back(editState());
-  applyEditState(undoStack_.takeLast());
+  --opIndex_;
+  replayLog();
   scheduleSnapshot();
   setStatus(QStringLiteral("Undo · Ctrl+Shift+Z or Ctrl+Y to redo"));
 }
@@ -1643,22 +1849,18 @@ void CaptureEditor::undoEdit() {
 void CaptureEditor::redoEdit() {
   endNudgeRun();
   cancelActiveDragForHistory();
-  if (redoStack_.isEmpty()) {
+  if (opIndex_ >= ops_.size()) {
     setStatus(QStringLiteral("Nothing to redo"));
     return;
   }
-  undoStack_.push_back(editState());
-  applyEditState(redoStack_.takeLast());
+  ++opIndex_;
+  replayLog();
   scheduleSnapshot();
   setStatus(QStringLiteral("Redo · Ctrl+Z to undo"));
 }
 
 void CaptureEditor::scheduleSnapshot() {
-  // Persist the composite after every completed edit so a crash leaves the
-  // annotated result on disk. Callers are edit completions (never per-motion),
-  // and snapshotBusy_/snapshotDirty_ collapse a burst into the in-flight write
-  // plus one trailing write, so no extra debounce timer is needed.
-  if (suppressSnapshots_ || selection_.isEmpty())
+  if (suppressSnapshots_ || capture_.source.isNull())
     return;
   if (snapshotPath_.isEmpty())
     snapshotPath_ = temporarySnapshotPath();
@@ -1676,23 +1878,17 @@ QImage CaptureEditor::renderCurrentOutput() const {
 void CaptureEditor::startSnapshotRender() {
   snapshotBusy_ = true;
   snapshotDirty_ = false;
-  const CaptureData captureCopy = capture_;
-  const QVector<Annotation> annotations = annotations_;
-  const QRectF selection = selection_;
-  const BackgroundStyle background = backgroundStyle_;
+  const QImage source = capture_.source;
   const QString path = snapshotPath_;
-  // Mid-edit writes exist for crash recovery only, so they trade PNG size for
-  // encode latency; finish() re-renders the same path at default compression
-  // because that file becomes the screenshot the user keeps.
-  const int quality = snapshotOutputRequested_ ? -1 : 80;
+  const QString logPath = operationLogPath(path);
+  const OperationLog log{ops_, opIndex_, nextAnnotationId_, nextMarker_};
+  const bool writeSource = !sourceWritten_ || !QFile::exists(path);
   snapshotWatcher_.setFuture(QtConcurrent::run(
-      [captureCopy, annotations, selection, background, path, quality] {
+      [source, path, logPath, log, writeSource] {
         QString error;
-        const QImage image = renderCapture(captureCopy, selection, annotations,
-                                           background);
-        if (image.isNull())
+        if (writeSource && !saveTemporarySnapshot(source, path, error, -1))
           return false;
-        return saveTemporarySnapshot(image, path, error, quality);
+        return saveOperationLog(logPath, log, error);
       }));
 }
 
@@ -1747,26 +1943,9 @@ void CaptureEditor::startCapture(CaptureMode mode, bool includeWindows) {
   }));
 }
 
-void CaptureEditor::startWindowCleanCapture(int index) {
-  if (windowPending_ || index < 0 || index >= capture_.windows.size())
-    return;
-  const WindowTarget target = capture_.windows.at(index);
-  setStatus(QStringLiteral("Capturing clean window surface…"));
-  QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-  windowPending_ = true;
-  windowWatcher_.setFuture(QtConcurrent::run([target] {
-    WindowJob job;
-    job.scaledSize = target.rect.size();
-    job.ok = captureWindowSurface(target, job.image, job.error);
-    return job;
-  }));
-}
-
 void CaptureEditor::enterEdit(QString status) {
   phase_ = Phase::Edit;
   tool_ = Tool::Select;
-  undoStack_.clear();
-  redoStack_.clear();
   setStatus(std::move(status));
   updatePointerCursor();
   if (quickOutputMode_ != QuickOutputMode::None) {
@@ -1778,7 +1957,11 @@ void CaptureEditor::enterEdit(QString status) {
     finish(output);
     return;
   }
-  scheduleSnapshot();
+  const QRectF full(QPointF(), capture_.previewSize);
+  if (ops_.isEmpty() && !selection_.isEmpty() && selection_ != full)
+    commitCrop(selection_);
+  else
+    scheduleSnapshot();
 }
 
 void CaptureEditor::handleEscape() {
@@ -1803,7 +1986,7 @@ void CaptureEditor::handleEscape() {
   textCaretTimer_.stop();
   editingAnnotation_ = -1;
   if (dragStartStateValid_) {
-    applyEditState(dragStartState_);
+    replayLog();
     scheduleSnapshot();
   }
   dragStartStateValid_ = false;
@@ -1832,7 +2015,12 @@ void CaptureEditor::handleEscape() {
 void CaptureEditor::chooseWindow(int index) {
   if (index < 0 || index >= capture_.windows.size())
     return;
-  startWindowCleanCapture(index);
+  selection_ = QRectF(capture_.windows.at(index).rect);
+  redactionBaseStale_ = true;
+  windowMode_ = false;
+  enterEdit(QStringLiteral(
+      "Window selected · Select moves layers · wheel zooms · outer handles "
+      "crop"));
 }
 
 void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
@@ -1889,7 +2077,6 @@ void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
 void CaptureEditor::acceptText() {
   const QString text = textEditor_->text().trimmed();
   if (!text.isEmpty()) {
-    recordEdit();
     Annotation annotation;
     annotation.kind = Annotation::Kind::Text;
     annotation.start =
@@ -1903,16 +2090,17 @@ void CaptureEditor::acceptText() {
             ? annotations_.at(editingAnnotation_).textBackground
             : textBackground_;
     if (editingAnnotation_ >= 0 && editingAnnotation_ < annotations_.size()) {
-      annotations_[editingAnnotation_] = std::move(annotation);
+      annotation.id = annotations_.at(editingAnnotation_).id;
+      annotations_[editingAnnotation_] = annotation;
       selectedAnnotation_ = editingAnnotation_;
       tool_ = Tool::Select;
       setStatus(QStringLiteral("Text updated · drag to move · handle resizes"));
+      commitPatch({editingAnnotation_});
     } else {
-      annotations_.push_back(std::move(annotation));
       selectedAnnotation_ = -1;
       setStatus(QStringLiteral("Text added · Esc for select mode"));
+      commitAnnotate(std::move(annotation));
     }
-    scheduleSnapshot();
   } else if (editingAnnotation_ >= 0) {
     tool_ = Tool::Select;
   }
@@ -1985,38 +2173,42 @@ void CaptureEditor::finish(OutputMode mode) {
     return;
   busy_ = true;
   setStatus(QStringLiteral("Preparing screenshot…"));
-  snapshotOutputRequested_ = true;
-  scheduleSnapshot();
-  if (!waitForSnapshot()) {
+  const QImage image = renderCurrentOutput();
+  QString error;
+  const QString exportPath = temporaryExportPath();
+  if (image.isNull() || exportPath.isEmpty() ||
+      !saveTemporarySnapshot(image, exportPath, error, -1)) {
     busy_ = false;
-    setStatus(QStringLiteral("Could not prepare screenshot snapshot"));
-    return;
-  }
-  const QFileInfo snapshotFile(snapshotPath_);
-  if (snapshotPath_.isEmpty() || !snapshotFile.exists() ||
-      snapshotFile.size() <= 0) {
-    busy_ = false;
-    setStatus(QStringLiteral("Could not prepare screenshot snapshot"));
+    setStatus(error.isEmpty()
+                  ? QStringLiteral("Could not prepare screenshot snapshot")
+                  : error);
     return;
   }
 
-  QString error;
   QString saved;
   if (mode == OutputMode::Copy || mode == OutputMode::Both) {
-    if (!copyPngFileToClipboard(snapshotPath_, error)) {
+    if (!copyPngFileToClipboard(exportPath, error)) {
+      QFile::remove(exportPath);
       busy_ = false;
       setStatus(error);
       return;
     }
   }
   if (mode == OutputMode::Save || mode == OutputMode::Both) {
-    saved = moveSnapshotToScreenshots(snapshotPath_, error);
+    saved = moveSnapshotToScreenshots(exportPath, error);
     if (saved.isEmpty()) {
+      QFile::remove(exportPath);
       busy_ = false;
       setStatus(error);
       return;
     }
-    snapshotPath_ = saved;
+  } else {
+    QFile::remove(exportPath);
+  }
+  if (!snapshotPath_.isEmpty()) {
+    QFile::remove(workingLogPath());
+    QFile::remove(snapshotPath_);
+    snapshotPath_.clear();
   }
 
   if (mode == OutputMode::Copy)
@@ -2100,9 +2292,8 @@ void CaptureEditor::handleToolbar(const QString &action) {
     if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
         annotations_.at(selectedAnnotation_).kind !=
             Annotation::Kind::Redaction) {
-      recordEdit();
       annotations_[selectedAnnotation_].color = annotationColor();
-      scheduleSnapshot();
+      commitPatch({selectedAnnotation_});
     }
   } else if (action == QStringLiteral("custom-color")) {
     usingCustomColor_ = true;
@@ -2110,12 +2301,11 @@ void CaptureEditor::handleToolbar(const QString &action) {
   } else if (action == QStringLiteral("ocr"))
     runOcr();
   else if (action == QStringLiteral("background")) {
-    recordEdit();
-    backgroundStyle_ = static_cast<BackgroundStyle>(
+    const auto next = static_cast<BackgroundStyle>(
         (static_cast<int>(backgroundStyle_) + 1) % 5);
     setStatus(QStringLiteral("Backdrop: %1 · B cycles")
-                  .arg(backgroundName(backgroundStyle_)));
-    scheduleSnapshot();
+                  .arg(backgroundName(next)));
+    commitBackground(next);
   } else if (action == QStringLiteral("undo")) {
     undoEdit();
   } else if (action == QStringLiteral("redo")) {
@@ -2259,20 +2449,9 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   } else if ((event->key() == Qt::Key_Delete ||
               event->key() == Qt::Key_Backspace) &&
              !selectedAnnotations_.isEmpty()) {
-    recordEdit();
-    QVector<int> removed = selectedAnnotations_;
-    std::ranges::sort(removed, [](int first, int second) {
-      return first > second;
-    });
-    for (const int index : removed) {
-      if (index >= 0 && index < annotations_.size())
-        annotations_.removeAt(index);
-    }
+    commitDelete(selectedAnnotations_);
     selectedAnnotations_.clear();
     selectedAnnotation_ = -1;
-    if (annotations_.isEmpty())
-      nextMarker_ = 1;
-    scheduleSnapshot();
   } else if (event->key() == Qt::Key_V) {
     tool_ = Tool::Select;
   } else if (event->matches(QKeySequence::SelectAll)) {
@@ -2293,7 +2472,6 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     if (!dragging_ && selectedAnnotation_ >= 0 &&
         selectedAnnotation_ < annotations_.size() &&
         annotations_.at(selectedAnnotation_).kind == dragShapeKind(shape)) {
-      recordEdit();
       Annotation &selected = annotations_[selectedAnnotation_];
       selected.filled = !selected.filled;
       setStatus(
@@ -2302,7 +2480,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
                              : QStringLiteral("ellipse"))
               .arg(fillName(selected.filled).toLower())
               .arg(rectangle ? QStringLiteral("R") : QStringLiteral("E")));
-      scheduleSnapshot();
+      commitPatch({selectedAnnotation_});
     } else if (tool_ == shape) {
       toggleShapeFill();
     } else {
@@ -2323,7 +2501,6 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
         annotations_.at(selectedAnnotation_).kind ==
             Annotation::Kind::Redaction) {
-      recordEdit();
       Annotation &redaction = annotations_[selectedAnnotation_];
       redaction.redactionStyle =
           redaction.redactionStyle == RedactionStyle::Solid
@@ -2331,7 +2508,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
               : RedactionStyle::Solid;
       setStatus(QStringLiteral("Selected redaction: %1 · D toggles")
                     .arg(redactionStyleName(redaction.redactionStyle)));
-      scheduleSnapshot();
+      commitPatch({selectedAnnotation_});
     } else {
       if (tool_ == Tool::Redact) {
         redactionStyle_ = redactionStyle_ == RedactionStyle::Solid
@@ -2366,21 +2543,19 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     pinSnapshot();
     return;
   } else if (event->key() == Qt::Key_B) {
-    recordEdit();
-    backgroundStyle_ = static_cast<BackgroundStyle>(
+    const auto next = static_cast<BackgroundStyle>(
         (static_cast<int>(backgroundStyle_) + 1) % 5);
     setStatus(QStringLiteral("Backdrop: %1 · B cycles")
-                  .arg(backgroundName(backgroundStyle_)));
-    scheduleSnapshot();
+                  .arg(backgroundName(next)));
+    commitBackground(next);
   } else if (event->key() >= Qt::Key_1 && event->key() <= Qt::Key_6) {
     colorIndex_ = event->key() - Qt::Key_1;
     usingCustomColor_ = false;
     if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
         annotations_.at(selectedAnnotation_).kind !=
             Annotation::Kind::Redaction) {
-      recordEdit();
       annotations_[selectedAnnotation_].color = annotationColor();
-      scheduleSnapshot();
+      commitPatch({selectedAnnotation_});
     }
   } else {
     QWidget::keyPressEvent(event);
@@ -2759,9 +2934,8 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
             Annotation::Kind::Redaction &&
         annotations_.at(selectedAnnotation_).kind !=
             Annotation::Kind::Spotlight) {
-      recordEdit();
       annotations_[selectedAnnotation_].color = customColor_;
-      scheduleSnapshot();
+      commitPatch({selectedAnnotation_});
     }
     QString clipboardError;
     static_cast<void>(copyTextToClipboard(
@@ -2862,18 +3036,16 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     return;
   }
   if (tool_ == Tool::Marker) {
-    recordEdit();
     Annotation annotation;
     annotation.kind = Annotation::Kind::Marker;
     annotation.start = point;
-    annotation.number = nextMarker_++;
+    annotation.number = nextMarker_;
     annotation.color = annotationColor();
     annotation.size = annotationSize_;
-    annotations_.push_back(std::move(annotation));
     selectedAnnotation_ = -1;
     setStatus(QStringLiteral("Marker %1 added · Esc for select mode")
                   .arg(annotation.number));
-    scheduleSnapshot();
+    commitAnnotate(std::move(annotation));
     updatePointerCursor();
   } else if (tool_ == Tool::Text) {
     beginText(point);
@@ -2949,8 +3121,12 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     }
     const bool cropped = interaction_ >= Interaction::CropTopLeft;
     const bool changed = dragStartStateValid_ && dragChanged_;
-    if (changed)
-      pushUndoState(dragStartState_);
+    if (changed) {
+      if (cropped)
+        commitCrop(selection_);
+      else
+        commitPatch(selectedAnnotations_);
+    }
     dragStartStateValid_ = false;
     dragChanged_ = false;
     dragging_ = false;
@@ -2959,8 +3135,6 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     if (cropped)
       setStatus(QStringLiteral(
           "Crop updated · Select moves layers · wheel zooms selected layer"));
-    if (changed)
-      scheduleSnapshot();
     updatePointerCursor();
     update();
     return;
@@ -2993,29 +3167,8 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       update();
       return;
     }
-    recordEdit(); // push pre-cut state (with the OLD selection/annotations)
-    cuts_.push_back(liveCut_);
-    for (Annotation &annotation : annotations_) {
-      // Shift every stored coordinate on the cut axis: horizontal cut shifts
-      // y values, vertical cut shifts x values.
-      auto shift = [&](QPointF &point) {
-        if (horizontal)
-          point.setY(shiftForCut(point.y(), lo, hi));
-        else
-          point.setX(shiftForCut(point.x(), lo, hi));
-      };
-      shift(annotation.start);
-      shift(annotation.end);
-      for (QPointF &point : annotation.points)
-        shift(point);
-    }
-    if (horizontal)
-      selection_.setHeight(std::max<qreal>(1.0, selection_.height() - band));
-    else
-      selection_.setWidth(std::max<qreal>(1.0, selection_.width() - band));
     cutDragActive_ = false;
-    refreshComposedCapture();
-    scheduleSnapshot();
+    commitCut(liveCut_);
     setStatus(QStringLiteral("Cut applied · Ctrl+Z to undo"));
     updatePointerCursor();
     update();
@@ -3036,7 +3189,6 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       length += QLineF(freehandPoints_.at(index - 1), freehandPoints_.at(index))
                     .length();
     if (length > 4) {
-      recordEdit();
       const bool highlighter = tool_ == Tool::Highlighter;
       Annotation annotation;
       annotation.kind = highlighter ? Annotation::Kind::Highlighter
@@ -3046,13 +3198,12 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       annotation.color = annotationColor();
       annotation.size = annotationSize_;
       annotation.points = std::move(freehandPoints_);
-      annotations_.push_back(std::move(annotation));
       selectedAnnotation_ = -1;
       setStatus(
           highlighter
               ? QStringLiteral("Highlight added · Esc for select mode")
               : QStringLiteral("Stroke added · Esc for select mode"));
-      scheduleSnapshot();
+      commitAnnotate(std::move(annotation));
     }
     freehandPoints_.clear();
     dragging_ = false;
@@ -3077,7 +3228,6 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       (draggedRect.normalized().width() >= kMinimumRedactionExtent &&
        draggedRect.normalized().height() >= kMinimumRedactionExtent);
   if (QLineF(dragStart_, end).length() > 4 && validRedaction) {
-    recordEdit();
     Annotation annotation;
     if (tool_ == Tool::Redact) {
       annotation.kind = Annotation::Kind::Redaction;
@@ -3098,14 +3248,13 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     annotation.end = end;
     annotation.color = annotationColor();
     annotation.size = annotationSize_;
-    annotations_.push_back(std::move(annotation));
     selectedAnnotation_ = -1;
     const bool redacted = tool_ == Tool::Redact;
     setStatus(redacted
                   ? QStringLiteral("%1 redaction added · Esc for select mode")
                         .arg(redactionStyleName(redactionStyle_))
                   : QStringLiteral("Layer added · Esc for select mode"));
-    scheduleSnapshot();
+    commitAnnotate(std::move(annotation));
     updatePointerCursor();
   } else if (tool_ == Tool::Redact) {
     setStatus(QStringLiteral(
@@ -3136,14 +3285,13 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
     const qreal delta = step > 0 ? 0.25 : -0.25;
     const int hovered = hoveredSpotlightAt(event->position());
     if (hovered >= 0) {
-      recordEdit();
       Annotation &annotation = annotations_[hovered];
       annotation.magnification =
           std::clamp(annotation.magnification + delta, 1.0, 4.0);
       spotlightMagnification_ = annotation.magnification;
       setStatus(QStringLiteral("Spotlight magnification · %1× · wheel adjusts")
                     .arg(annotation.magnification, 0, 'f', 1));
-      scheduleSnapshot();
+      commitPatch({hovered});
     } else {
       spotlightMagnification_ =
           std::clamp(spotlightMagnification_ + delta, 1.0, 4.0);
@@ -3707,6 +3855,14 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     }
   }
   drawStatusPill(painter, rect(), status_);
+  QVector<QPointF> keepVisible;
+  if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
+      hasEndpointHandles(annotations_.at(selectedAnnotation_).kind)) {
+    const Annotation &selected = annotations_.at(selectedAnnotation_);
+    const qreal scale = editScale();
+    keepVisible = {image.topLeft() + selected.start * scale,
+                   image.topLeft() + selected.end * scale};
+  }
   drawHotkeyLegend(
       painter, rect(), cursor_,
       {{QStringLiteral("V"), QStringLiteral("Select / move layer")},
@@ -3727,7 +3883,8 @@ void CaptureEditor::paintEdit(QPainter &painter) {
        {QStringLiteral("Enter"), QStringLiteral("Copy + save")},
        {QStringLiteral("Ctrl+C"), QStringLiteral("Copy only")},
        {QStringLiteral("Ctrl+S"), QStringLiteral("Save only")},
-       {QStringLiteral("Esc"), QStringLiteral("Arrow / twice close")}});
+       {QStringLiteral("Esc"), QStringLiteral("Arrow / twice close")}},
+      keepVisible);
   if (hoveredButton) {
     drawInstantTooltip(painter, rect(), hoveredButton->rect,
                        hoveredButton->tooltip);

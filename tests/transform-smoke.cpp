@@ -49,8 +49,6 @@ bool runTransformSmoke(QString &error) {
   }
   const QString fakeHyprctl =
       QDir(fakeCommands.path()).filePath(QStringLiteral("hyprctl"));
-  const QString fakeGrim =
-      QDir(fakeCommands.path()).filePath(QStringLiteral("grim"));
   const QByteArray hyprctlScript = QByteArrayLiteral(
       "#!/usr/bin/env bash\n"
       "set -euo pipefail\n"
@@ -63,38 +61,26 @@ bool runTransformSmoke(QString &error) {
       "  printf '[{\"workspace\":{\"id\":7},\"at\":[0,0],\"size\":[100,100],"
       "\"title\":\"Test window\",\"stableId\":\"w1\"}]\\n'\n"
       "fi\n");
-  // grim streams the capture on stdout; the garbage mode exits cleanly with
-  // undecodable bytes so the decode failure path can be checked.
-  const QByteArray grimScript = QByteArrayLiteral(
-      "#!/usr/bin/env bash\n"
-      "set -euo pipefail\n"
-      "if [[ -n \"${OMASNAP_TEST_GRIM_GARBAGE:-}\" ]]; then\n"
-      "  printf 'not-a-ppm'\n"
-      "  exit 0\n"
-      "fi\n"
-      "cat -- \"$OMASNAP_TEST_PPM\"\n");
-  if (!writeExecutable(fakeHyprctl, hyprctlScript) ||
-      !writeExecutable(fakeGrim, grimScript)) {
+  if (!writeExecutable(fakeHyprctl, hyprctlScript)) {
     error = QStringLiteral("Could not create transform-test commands");
     return false;
   }
   QImage rotatedSource(300, 200, QImage::Format_RGB32);
   rotatedSource.fill(QColor(QStringLiteral("#123456")));
-  const QString ppmPath =
-      QDir(fakeCommands.path()).filePath(QStringLiteral("source.ppm"));
-  if (!rotatedSource.save(ppmPath, "PPM")) {
+  const QString capturePath =
+      QDir(fakeCommands.path()).filePath(QStringLiteral("source.png"));
+  if (!rotatedSource.save(capturePath, "PNG")) {
     error = QStringLiteral("Could not create transform-test capture");
     return false;
   }
 
   const QByteArray originalPath = qgetenv("PATH");
   qputenv("PATH", fakeCommands.path().toUtf8() + ':' + originalPath);
-  qputenv("OMASNAP_TEST_PPM", ppmPath.toUtf8());
+  qputenv("OMASNAP_TEST_CAPTURE", capturePath.toUtf8());
   const auto restoreEnvironment = [&originalPath] {
     qputenv("PATH", originalPath);
-    qunsetenv("OMASNAP_TEST_PPM");
+    qunsetenv("OMASNAP_TEST_CAPTURE");
     qunsetenv("OMASNAP_TEST_TRANSFORM");
-    qunsetenv("OMASNAP_TEST_GRIM_GARBAGE");
   };
   for (const int transform : {1, 3, 5, 7}) {
     qputenv("OMASNAP_TEST_TRANSFORM", QByteArray::number(transform));
@@ -123,15 +109,14 @@ bool runTransformSmoke(QString &error) {
     return false;
   }
 
-  // A grim that exits cleanly but streams undecodable bytes must still explain
-  // itself instead of reporting an empty error.
-  qputenv("OMASNAP_TEST_GRIM_GARBAGE", QByteArrayLiteral("1"));
-  CaptureData undecodable;
-  QString decodeError;
-  const bool decoded = captureFocusedMonitor(undecodable, false, decodeError);
-  qunsetenv("OMASNAP_TEST_GRIM_GARBAGE");
-  if (decoded || decodeError.isEmpty()) {
-    error = QStringLiteral("Undecodable capture data did not report an error");
+  // Without a test capture, missing output-capture protocol must fail clearly.
+  qunsetenv("OMASNAP_TEST_CAPTURE");
+  CaptureData missingProtocol;
+  QString protocolError;
+  const bool captured =
+      captureFocusedMonitor(missingProtocol, false, protocolError);
+  if (captured || protocolError.isEmpty()) {
+    error = QStringLiteral("Missing output capture did not report an error");
     restoreEnvironment();
     return false;
   }
