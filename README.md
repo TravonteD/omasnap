@@ -115,7 +115,7 @@ Install the complete build/runtime dependency set:
 sudo pacman -S --needed \
   base-devel cmake ninja pkgconf qt6-base layer-shell-qt \
   wayland wayland-protocols hyprland wl-clipboard \
-  tesseract tesseract-data-eng tesseract-data-tha
+  tesseract tesseract-data-eng
 ```
 
 Build and install:
@@ -329,10 +329,7 @@ edges.
 ## Development and verification
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-QT_QPA_PLATFORM=offscreen \
-  ./build/omasnap-smoke /tmp/omasnap-smoke
+make check
 ```
 
 The smoke executable exercises region/window/fullscreen startup modes, capture selection,
@@ -341,8 +338,8 @@ replay, vector movement and scaling, text editing, OCR, native-DPI output,
 endpoint-only line selection, external crop handles, and the native-pixel
 measurement readout on a scaled monitor.
 
-`.github/workflows/build-linux.yml` performs the same release build and interaction smoke
-in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux
+`.github/workflows/build-linux.yml` runs the same `make check` build, interaction smoke,
+and available static-analysis checks in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux
 artifact. A `v*` tag also attaches that artifact to the corresponding GitHub release.
 
 ## Acknowledgements

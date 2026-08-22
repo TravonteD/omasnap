@@ -1,7 +1,6 @@
-/** @fileoverview Captures native window surfaces through Wayland protocols. */
+/** @fileoverview Captures native monitor outputs through Wayland protocols. */
 #include "capture.hpp"
 
-#include "ext-foreign-toplevel-list-v1-client-protocol.h"
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "ext-image-copy-capture-v1-client-protocol.h"
 
@@ -25,11 +24,6 @@
 #include <vector>
 
 namespace {
-struct Toplevel {
-  ext_foreign_toplevel_handle_v1 *handle = nullptr;
-  std::string identifier;
-};
-
 struct OutputInfo {
   wl_output *output = nullptr;
   std::string name;
@@ -39,8 +33,6 @@ struct CaptureState {
   wl_display *display = nullptr;
   wl_registry *registry = nullptr;
   wl_shm *shm = nullptr;
-  ext_foreign_toplevel_list_v1 *toplevelList = nullptr;
-  ext_foreign_toplevel_image_capture_source_manager_v1 *sourceManager = nullptr;
   ext_output_image_capture_source_manager_v1 *outputSourceManager = nullptr;
   ext_image_copy_capture_manager_v1 *captureManager = nullptr;
   ext_image_capture_source_v1 *source = nullptr;
@@ -48,7 +40,6 @@ struct CaptureState {
   ext_image_copy_capture_frame_v1 *frame = nullptr;
   wl_shm_pool *pool = nullptr;
   wl_buffer *buffer = nullptr;
-  std::vector<std::unique_ptr<Toplevel>> toplevels;
   std::vector<std::unique_ptr<OutputInfo>> outputs;
   std::vector<uint32_t> shmFormats;
   uint32_t width = 0;
@@ -71,15 +62,6 @@ struct CaptureState {
       ext_image_copy_capture_session_v1_destroy(session);
     if (source)
       ext_image_capture_source_v1_destroy(source);
-    for (const auto &toplevel : toplevels) {
-      if (toplevel->handle)
-        ext_foreign_toplevel_handle_v1_destroy(toplevel->handle);
-    }
-    if (toplevelList)
-      ext_foreign_toplevel_list_v1_destroy(toplevelList);
-    if (sourceManager)
-      ext_foreign_toplevel_image_capture_source_manager_v1_destroy(
-          sourceManager);
     for (const auto &output : outputs) {
       if (output->output)
         wl_output_release(output->output);
@@ -105,31 +87,6 @@ struct CaptureState {
   }
 };
 
-void handleClosed(void *, ext_foreign_toplevel_handle_v1 *) {}
-void handleDone(void *, ext_foreign_toplevel_handle_v1 *) {}
-void handleTitle(void *, ext_foreign_toplevel_handle_v1 *, const char *) {}
-void handleAppId(void *, ext_foreign_toplevel_handle_v1 *, const char *) {}
-void handleIdentifier(void *data, ext_foreign_toplevel_handle_v1 *,
-                      const char *identifier) {
-  static_cast<Toplevel *>(data)->identifier = identifier ? identifier : "";
-}
-
-constexpr ext_foreign_toplevel_handle_v1_listener kHandleListener{
-    handleClosed, handleDone, handleTitle, handleAppId, handleIdentifier};
-
-void listToplevel(void *data, ext_foreign_toplevel_list_v1 *,
-                  ext_foreign_toplevel_handle_v1 *handle) {
-  auto &state = *static_cast<CaptureState *>(data);
-  auto toplevel = std::make_unique<Toplevel>();
-  toplevel->handle = handle;
-  ext_foreign_toplevel_handle_v1_add_listener(handle, &kHandleListener,
-                                              toplevel.get());
-  state.toplevels.push_back(std::move(toplevel));
-}
-void listFinished(void *, ext_foreign_toplevel_list_v1 *) {}
-constexpr ext_foreign_toplevel_list_v1_listener kListListener{listToplevel,
-                                                              listFinished};
-
 void outputGeometry(void *, wl_output *, int32_t, int32_t, int32_t, int32_t,
                     int32_t, const char *, const char *, int32_t) {}
 void outputMode(void *, wl_output *, uint32_t, int32_t, int32_t, int32_t) {}
@@ -149,24 +106,6 @@ void registryGlobal(void *data, wl_registry *registry, uint32_t name,
   if (std::strcmp(interface, wl_shm_interface.name) == 0) {
     state.shm = static_cast<wl_shm *>(wl_registry_bind(
         registry, name, &wl_shm_interface, std::min(version, 1U)));
-  } else if (std::strcmp(interface,
-                         ext_foreign_toplevel_list_v1_interface.name) == 0) {
-    state.toplevelList =
-        static_cast<ext_foreign_toplevel_list_v1 *>(wl_registry_bind(
-            registry, name, &ext_foreign_toplevel_list_v1_interface,
-            std::min(version, 1U)));
-    ext_foreign_toplevel_list_v1_add_listener(state.toplevelList,
-                                              &kListListener, &state);
-  } else if (std::strcmp(
-                 interface,
-                 ext_foreign_toplevel_image_capture_source_manager_v1_interface
-                     .name) == 0) {
-    state.sourceManager =
-        static_cast<ext_foreign_toplevel_image_capture_source_manager_v1 *>(
-            wl_registry_bind(
-                registry, name,
-                &ext_foreign_toplevel_image_capture_source_manager_v1_interface,
-                std::min(version, 1U)));
   } else if (std::strcmp(interface,
                          ext_image_copy_capture_manager_v1_interface.name) ==
              0) {
@@ -454,54 +393,6 @@ static bool captureCurrentSource(CaptureState &state, QImage &image, QString &er
     return false;
   }
   return true;
-}
-
-bool captureWindowSurface(const WindowTarget &window, QImage &image,
-                          QString &error) {
-  if (window.stableId.isEmpty()) {
-    error =
-        QStringLiteral("Hyprland did not provide a stable window identifier");
-    return false;
-  }
-
-  CaptureState state;
-  state.display = wl_display_connect(nullptr);
-  if (!state.display) {
-    error = QStringLiteral("Could not connect to Wayland for window capture");
-    return false;
-  }
-  state.registry = wl_display_get_registry(state.display);
-  wl_registry_add_listener(state.registry, &kRegistryListener, &state);
-  if (wl_display_roundtrip(state.display) < 0 ||
-      wl_display_roundtrip(state.display) < 0) {
-    error = QStringLiteral("Could not enumerate Wayland capture sources");
-    return false;
-  }
-  if (!state.shm || !state.toplevelList || !state.sourceManager ||
-      !state.captureManager) {
-    error = QStringLiteral("Compositor does not expose native window capture");
-    return false;
-  }
-
-  const auto match =
-      std::ranges::find_if(state.toplevels, [&](const auto &toplevel) {
-        return toplevel->identifier == window.stableId;
-      });
-  if (match == state.toplevels.end()) {
-    error = QStringLiteral(
-        "Selected window is no longer available for native capture");
-    return false;
-  }
-
-  state.source =
-      ext_foreign_toplevel_image_capture_source_manager_v1_create_source(
-          state.sourceManager, (*match)->handle);
-  return captureCurrentSource(
-      state, image, error,
-      QStringLiteral("Compositor stopped native window capture"),
-      QStringLiteral("Compositor could not capture the selected window surface"),
-      QStringLiteral("Could not decode native window capture"),
-      QStringLiteral("Unsupported transform in native window capture"));
 }
 
 bool captureOutputSurface(const MonitorInfo &monitor, QImage &image,

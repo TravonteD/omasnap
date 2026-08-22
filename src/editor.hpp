@@ -371,6 +371,8 @@ private:
   qreal cutBandHi_ = 0.0;
   qreal cutDragRatio_ = 1.0;
   qreal cutDragOriginOffset_ = 0.0;
+  QImage committedCutSource_;
+  QSize committedCutLogicalSize_;
   bool windowMode_ = false;
   BackgroundStyle backgroundStyle_ = BackgroundStyle::None;
   bool busy_ = false;

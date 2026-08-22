@@ -3141,6 +3141,8 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       if (!cutDragActive_ &&
           std::max(std::abs(delta.x()), std::abs(delta.y())) > 3.0) {
         cutDragActive_ = true;
+        committedCutSource_ = capture_.source;
+        committedCutLogicalSize_ = capture_.previewSize;
         // Dominant vertical delta cuts a horizontal band (rows); dominant
         // horizontal delta cuts a vertical band (columns).
         liveCut_.orientation = std::abs(delta.y()) >= std::abs(delta.x())
@@ -3974,11 +3976,17 @@ void CaptureEditor::updatePointerCursor() {
 }
 
 void CaptureEditor::refreshComposedCapture(const CutOp *liveCut) {
-  QVector<CutOp> cuts = cuts_;
-  if (liveCut)
-    cuts.push_back(*liveCut);
-  capture_.source = composeCuts(pristineSource_, cuts);
-  capture_.previewSize = composedLogicalSize(pristineLogicalSize_, cuts);
+  if (liveCut && !committedCutSource_.isNull()) {
+    capture_.source = removeBand(committedCutSource_, liveCut->orientation,
+                                 liveCut->sourceStart, liveCut->sourceEnd);
+    capture_.previewSize =
+        composedLogicalSize(committedCutLogicalSize_, {*liveCut});
+  } else {
+    capture_.source = composeCuts(pristineSource_, cuts_);
+    capture_.previewSize = composedLogicalSize(pristineLogicalSize_, cuts_);
+    committedCutSource_ = {};
+    committedCutLogicalSize_ = {};
+  }
   backdropKey_ = 0;           // force backdrop pixmap rebuild
   redactionBaseStale_ = true; // force redaction layer rebuild
   update();

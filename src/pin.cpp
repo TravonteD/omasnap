@@ -1,4 +1,5 @@
 #include "pin.hpp"
+#include "capture.hpp"
 #include "pin-file.hpp"
 #include "pin-layout.hpp"
 #include "icons.hpp"
@@ -44,55 +45,6 @@ constexpr qreal kVisualRadius = 12;
 constexpr qreal kControlsHeight = 36;
 constexpr int kPinWidth = 250;
 constexpr int kPinHeight = 200;
-
-// wl-copy backgrounds itself and keeps serving the selection after this process
-// exits, which QClipboard cannot do on Wayland.
-bool copyPngToClipboard(const QImage &image, QString &error) {
-  QByteArray png;
-  QBuffer buffer(&png);
-  buffer.open(QIODevice::WriteOnly);
-  if (!image.save(&buffer, "PNG")) {
-    error = QStringLiteral("Could not encode PNG");
-    return false;
-  }
-
-  QProcess copy;
-  copy.start(QStringLiteral("wl-copy"),
-             {QStringLiteral("--type"), QStringLiteral("image/png")});
-  if (!copy.waitForStarted(2000)) {
-    error = copy.errorString();
-    return false;
-  }
-  copy.write(png);
-  copy.closeWriteChannel();
-  if (!copy.waitForFinished(5000) || copy.exitCode() != 0) {
-    error = QString::fromUtf8(copy.readAllStandardError()).trimmed();
-    if (error.isEmpty())
-      error = QStringLiteral("wl-copy failed");
-    return false;
-  }
-  return true;
-}
-
-bool copyPinTextToClipboard(const QString &text, QString &error) {
-  QProcess copy;
-  copy.start(
-      QStringLiteral("wl-copy"),
-      {QStringLiteral("--type"), QStringLiteral("text/plain;charset=utf-8")});
-  if (!copy.waitForStarted(2000)) {
-    error = copy.errorString();
-    return false;
-  }
-  copy.write(text.toUtf8());
-  copy.closeWriteChannel();
-  if (!copy.waitForFinished(5000) || copy.exitCode() != 0) {
-    error = QString::fromUtf8(copy.readAllStandardError()).trimmed();
-    if (error.isEmpty())
-      error = QStringLiteral("wl-copy failed");
-    return false;
-  }
-  return true;
-}
 
 class PinWindow final : public QWidget {
 public:
@@ -216,14 +168,14 @@ protected:
       }
       if (copyButtonRect().contains(position)) {
         QString error;
-        showToast(copyPngToClipboard(image_, error)
+        showToast(copyImageToClipboard(image_, error)
                       ? QStringLiteral("Copied to clipboard")
                       : error);
         return;
       }
       if (pathButtonRect().contains(position)) {
         QString error;
-        showToast(copyPinTextToClipboard(path_, error)
+        showToast(copyTextToClipboard(path_, error)
                       ? QStringLiteral("Copied path")
                       : error);
         return;
@@ -314,7 +266,7 @@ protected:
     }
     if (event->matches(QKeySequence::Copy)) {
       QString error;
-      showToast(copyPngToClipboard(image_, error)
+      showToast(copyImageToClipboard(image_, error)
                     ? QStringLiteral("Copied to clipboard")
                     : error);
       return;

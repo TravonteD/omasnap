@@ -331,10 +331,16 @@ int main(int argc, char **argv) {
 
   if (instantFullscreenOutput) {
     QString outputError;
-    if (!quickOutput(renderCapture(capture,
-                                   QRectF(QPointF(), capture.previewSize), {},
-                                   BackgroundStyle::None),
-                     quickOutputMode, outputError)) {
+    const QSize expectedSize(
+        qRound(capture.previewSize.width() * capture.monitor.scale),
+        qRound(capture.previewSize.height() * capture.monitor.scale));
+    const QImage output = capture.monitor.scale <= 1.0 ||
+                                  capture.source.size() == expectedSize
+                              ? capture.source
+                              : renderCapture(capture,
+                                              QRectF(QPointF(), capture.previewSize), {},
+                                              BackgroundStyle::None);
+    if (!quickOutput(output, quickOutputMode, outputError)) {
       qCritical().noquote() << outputError;
       return 1;
     }

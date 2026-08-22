@@ -4888,23 +4888,6 @@ int main(int argc, char **argv) {
   QDir(savedRoot).removeRecursively();
   qputenv("OMASNAP_SCREENSHOT_DIR", savedRoot.toUtf8());
 
-  const QString nativeStableId =
-      qEnvironmentVariable("OMASNAP_SMOKE_NATIVE_STABLE_ID");
-  if (!nativeStableId.isEmpty()) {
-    QImage nativeSurface;
-    QString nativeError;
-    if (!captureWindowSurface(
-            {{}, nativeStableId, QStringLiteral("native smoke")}, nativeSurface,
-            nativeError)) {
-      qWarning().noquote() << nativeError;
-      return 10;
-    }
-    if (!nativeSurface.save(outputRoot + QStringLiteral("-native-window.png"),
-                            "PNG"))
-      return 11;
-    return 0;
-  }
-
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
   capture.monitor.geometry = {0, 0, 800, 600};

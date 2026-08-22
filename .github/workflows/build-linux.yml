@@ -20,7 +20,8 @@ jobs:
         run: >-
           pacman -Syu --noconfirm --needed
           base-devel cmake ninja pkgconf qt6-base layer-shell-qt
-          wayland wayland-protocols tesseract tesseract-data-eng
+          wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng
+          clang
 
       - name: Check out source
         uses: actions/checkout@v4
@@ -28,16 +29,10 @@ jobs:
       - name: Check installer scripts
         run: bash -n install-omarchy
 
-      - name: Configure release build
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Compile
-        run: cmake --build build --parallel
-
-      - name: Run interaction smoke
+      - name: Build, run interaction smoke, and analyze sources
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ./build/omasnap-smoke /tmp/omasnap-smoke
+        run: make check
 
       - name: Stage installation
         run: cmake --install build --prefix "$PWD/stage/usr"

@@ -133,8 +133,6 @@ enum class AnnotationLayer { Redaction, Default };
 /** Bounds of a text layer's glyph box, or of its readability pill when it
  *  has one; `start` is the baseline origin. */
 [[nodiscard]] QRectF annotationTextBounds(const Annotation &annotation);
-[[nodiscard]] bool captureWindowSurface(const WindowTarget &window,
-                                        QImage &image, QString &error);
 /** Captures the named output through ext-image-copy-capture. */
 [[nodiscard]] bool captureOutputSurface(const MonitorInfo &monitor,
                                         QImage &image, QString &error);
@@ -154,6 +152,7 @@ enum class AnnotationLayer { Redaction, Default };
 /** Loads the current Wayland clipboard image. */
 [[nodiscard]] bool loadClipboardImage(QImage &image, QString &error);
 [[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);
+[[nodiscard]] bool copyImageToClipboard(const QImage &image, QString &error);
 [[nodiscard]] bool quickOutput(const QImage &image, QuickOutputMode mode,
                                QString &error);
 [[nodiscard]] bool copyTextToClipboard(const QString &text, QString &error);

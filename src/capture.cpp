@@ -987,10 +987,26 @@ bool copyPngFileToClipboard(const QString &path, QString &error) {
   return copyToWaylandClipboard(QStringLiteral("image/png"), png, error);
 }
 
+bool copyImageToClipboard(const QImage &image, QString &error) {
+  QByteArray png;
+  QBuffer buffer(&png);
+  if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG")) {
+    error = QStringLiteral("Could not encode screenshot as PNG");
+    return false;
+  }
+  return copyToWaylandClipboard(QStringLiteral("image/png"), png, error);
+}
+
 bool quickOutput(const QImage &image, QuickOutputMode mode, QString &error) {
   if (image.isNull() || mode == QuickOutputMode::None) {
     error = QStringLiteral("Could not prepare screenshot snapshot");
     return false;
+  }
+  if (mode == QuickOutputMode::Copy) {
+    if (!copyImageToClipboard(image, error))
+      return false;
+    sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"));
+    return true;
   }
   const QString path = temporarySnapshotPath();
   if (path.isEmpty() || !saveTemporarySnapshot(image, path, error))
