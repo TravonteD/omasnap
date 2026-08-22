@@ -340,6 +340,9 @@ QPointF constrainedRedactionEndpoint(const QPointF &candidate,
       constrainedRedactionCoordinate(candidate.y(), fixed.y(), original.y())};
 }
 
+/// One top-to-bottom pass of the OCR scan band.
+constexpr qint64 kOcrSweepMs = 1200;
+
 void drawStatusPill(QPainter &painter, const QRect &bounds,
                     const QString &text) {
   QFont font(QStringLiteral("Noto Sans"));
@@ -641,12 +644,24 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
       setStatus(QStringLiteral("No text found in that area"));
       return;
     }
-    // Keep the animation clock ticking so the result card can fade out.
-    ocrResultText_ = shown;
-    ocrClock_.restart();
-    ocrResultTimer_.start();
     setStatus(QStringLiteral("OCR copied to clipboard"));
     sendCaptureNotification(QStringLiteral("Copied text from screenshot"));
+    // Let the scan band finish the sweep it is on (and always at least one
+    // full pass) before the card appears: a result that pops up mid-sweep
+    // reads as a glitch, however fast tesseract was.
+    const qint64 elapsed = ocrClock_.elapsed();
+    const qint64 sweeps =
+        std::max<qint64>(1, (elapsed + kOcrSweepMs - 1) / kOcrSweepMs);
+    const int wait = static_cast<int>(sweeps * kOcrSweepMs - elapsed);
+    QTimer::singleShot(wait, this, [this, shown] {
+      if (ocrRegion_.isEmpty() || ocrWatcher_.isRunning())
+        return; // dismissed, or a newer OCR took over the region
+      // The animation clock keeps ticking so the result card can fade out.
+      ocrResultText_ = shown;
+      ocrClock_.restart();
+      ocrResultTimer_.start();
+      update();
+    });
   });
 
   connect(&snapshotWatcher_, &QFutureWatcher<bool>::finished, this, [this] {
@@ -2604,10 +2619,9 @@ void CaptureEditor::paintOcrOverlay(QPainter &painter, const QRectF &image,
   if (ocrResultText_.isEmpty()) {
     // Scanning: a tinted box with a bright band sweeping top to bottom, the
     // way a flatbed reads a page. Purely decorative; tesseract sets the pace.
-    constexpr qreal kPeriodMs = 1200.0;
     const qreal t = std::fmod(static_cast<qreal>(ocrClock_.elapsed()),
-                              kPeriodMs) /
-                    kPeriodMs;
+                              qreal(kOcrSweepMs)) /
+                    qreal(kOcrSweepMs);
     const qreal bandHeight = std::clamp(region.height() * 0.35, 18.0, 64.0);
     const qreal y = region.top() - bandHeight + t * (region.height() + bandHeight);
     painter.setClipRect(region);
