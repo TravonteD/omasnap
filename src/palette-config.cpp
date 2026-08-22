@@ -8,7 +8,8 @@
 PaletteConfig defaultPaletteConfig() {
   return {{QColor(QStringLiteral("#ff375f")), QColor(QStringLiteral("#ff9f0a")),
            QColor(QStringLiteral("#ffd60a")), QColor(QStringLiteral("#30d158")),
-           QColor(QStringLiteral("#0a84ff")), QColor(QStringLiteral("#bf5af2"))},
+           QColor(QStringLiteral("#0a84ff")), QColor(QStringLiteral("#bf5af2")),
+           QColor(QStringLiteral("#000000")), QColor(QStringLiteral("#ffffff"))},
           QColor(QStringLiteral("#ff375f"))};
 }
 

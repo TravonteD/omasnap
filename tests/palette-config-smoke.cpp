@@ -22,6 +22,11 @@ bool runPaletteConfigSmoke(QString &error) {
     return false;
   }
   const PaletteConfig defaults = defaultPaletteConfig();
+  if (defaults.palette.at(6) != QColor(Qt::black) ||
+      defaults.palette.at(7) != QColor(Qt::white)) {
+    error = QStringLiteral("default palette is missing black or white");
+    return false;
+  }
 
   // Missing file -> defaults.
   const PaletteConfig missing =
@@ -31,10 +36,10 @@ bool runPaletteConfigSmoke(QString &error) {
     return false;
   }
 
-  // Full config overrides all six slots and the custom seed.
+  // Full config overrides all eight slots and the custom seed.
   const QString full = dir.filePath(QStringLiteral("full.conf"));
   if (!writeFile(full, "[colors]\n"
-                       "palette=#FF5D62,#3150AA,#98BB6C,#FFA066,#D27E99,#DCD7BA\n"
+                       "palette=#FF5D62,#3150AA,#98BB6C,#FFA066,#D27E99,#DCD7BA,#101010,#EFEFEF\n"
                        "custom=#FF5D62\n")) {
     error = QStringLiteral("could not write full config");
     return false;
@@ -42,6 +47,8 @@ bool runPaletteConfigSmoke(QString &error) {
   const PaletteConfig loaded = loadPaletteConfig(full);
   if (loaded.palette.at(0) != QColor(QStringLiteral("#FF5D62")) ||
       loaded.palette.at(5) != QColor(QStringLiteral("#DCD7BA")) ||
+      loaded.palette.at(6) != QColor(QStringLiteral("#101010")) ||
+      loaded.palette.at(7) != QColor(QStringLiteral("#EFEFEF")) ||
       loaded.custom != QColor(QStringLiteral("#FF5D62"))) {
     error = QStringLiteral("full config not applied");
     return false;

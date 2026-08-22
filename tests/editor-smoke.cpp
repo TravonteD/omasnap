@@ -23,7 +23,9 @@
 #include <QFileInfo>
 #include <QFontMetricsF>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QPixmap>
+#include <QScrollBar>
 #include <QTemporaryDir>
 #include <QUrl>
 #include <QWheelEvent>
@@ -1174,22 +1176,39 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
   }
 
   const Annotation clicked =
-      textAnnotation({125, 280}, QStringLiteral("Clicked away"));
-  QTest::keyClicks(QApplication::focusWidget(), clicked.text);
+      textAnnotation({125, 280}, QStringLiteral("Clicked\naway"));
+  QWidget *inlineEditor = QApplication::focusWidget();
+  QTest::keyClicks(inlineEditor, QStringLiteral("Clicked"));
+  QTest::keyClick(inlineEditor, Qt::Key_Return);
+  application.processEvents();
+  if (QApplication::focusWidget() != inlineEditor ||
+      editor.annotationCountForTest() != 0) {
+    error = QStringLiteral("Enter committed text instead of starting a new line");
+    return false;
+  }
+  const auto *multilineEditor = qobject_cast<QPlainTextEdit *>(inlineEditor);
+  if (!multilineEditor ||
+      multilineEditor->toPlainText() != QStringLiteral("Clicked\n") ||
+      multilineEditor->verticalScrollBar()->value() != 0 ||
+      multilineEditor->viewport()->height() <
+          multilineEditor->fontMetrics().lineSpacing() * 2) {
+    error = QStringLiteral("First Enter hid the existing line or clipped the editor");
+    return false;
+  }
+  QTest::keyClicks(inlineEditor, QStringLiteral("away"));
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(450, 300));
   application.processEvents();
   if (!snapshotMatches(
           renderCapture(capture, selection, {clicked}, BackgroundStyle::None))) {
-    error = QStringLiteral("Clicking the canvas discarded in-progress text");
+    error = QStringLiteral("Clicking the canvas discarded multiline text");
     return false;
   }
 
   const Annotation toolbar =
       textAnnotation({325, 180}, QStringLiteral("Toolbar"));
-  // 99,92 is the arrow tool button: the toolbar row sits above the capture,
-  // and the extra ellipse slot rescales the row to 21 buttons.
+  // The arrow button sits in the spaced toolbar above the capture.
   QTest::keyClicks(QApplication::focusWidget(), toolbar.text);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(99, 92));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(60, 43));
   QTest::mouseMove(&editor, QPoint(400, 300), 10);
   application.processEvents();
   if (!snapshotMatches(renderCapture(capture, selection, {clicked, toolbar},
@@ -1600,7 +1619,7 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 450));
   application.processEvents();
   QTest::keyClicks(QApplication::focusWidget(), QStringLiteral("Text 1"));
-  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return, Qt::ControlModifier);
   application.processEvents();
   if (editor.armedToolForTest() != CaptureEditor::Tool::Text) {
     error = QStringLiteral(
@@ -1611,7 +1630,7 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 450));
   application.processEvents();
   QTest::keyClicks(QApplication::focusWidget(), QStringLiteral("Text 2"));
-  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return, Qt::ControlModifier);
   application.processEvents();
   if (editor.armedToolForTest() != CaptureEditor::Tool::Text) {
     error = QStringLiteral(
@@ -1691,6 +1710,19 @@ bool runCutToolSmoke(QApplication &application, QString &error) {
   constexpr int band1 = 60;
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 200));
   QTest::mouseMove(&editor, QPoint(150, 200 + band1), 10);
+  application.processEvents();
+  if (editor.renderCurrentOutput() != originalOutput) {
+    error = QStringLiteral("Cut preview changed the image before release");
+    return false;
+  }
+  const QImage horizontalPreview = editor.grab().toImage();
+  const QColor horizontalBand = horizontalPreview.pixelColor(450, 230);
+  const QColor horizontalOutside = horizontalPreview.pixelColor(450, 180);
+  if (horizontalBand == horizontalOutside ||
+      horizontalBand.red() <= horizontalOutside.red()) {
+    error = QStringLiteral("Horizontal cut preview did not shade its removal band");
+    return false;
+  }
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(150, 200 + band1));
   application.processEvents();
@@ -1713,6 +1745,19 @@ bool runCutToolSmoke(QApplication &application, QString &error) {
   constexpr int band2 = 80;
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
   QTest::mouseMove(&editor, QPoint(300 + band2, 200), 10);
+  application.processEvents();
+  if (editor.renderCurrentOutput() != afterCut1) {
+    error = QStringLiteral("Second cut preview changed the image before release");
+    return false;
+  }
+  const QImage verticalPreview = editor.grab().toImage();
+  const QColor verticalBand = verticalPreview.pixelColor(340, 300);
+  const QColor verticalOutside = verticalPreview.pixelColor(420, 300);
+  if (verticalBand == verticalOutside ||
+      verticalBand.red() <= verticalOutside.red()) {
+    error = QStringLiteral("Vertical cut preview did not shade its removal band");
+    return false;
+  }
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(300 + band2, 200));
   application.processEvents();
@@ -2287,12 +2332,12 @@ bool runStuckModifierSmoke(QApplication &application, QString &error) {
   editor.show();
   application.processEvents();
   // Mouse only from here: the region, then the arrow tool from the toolbar
-  // (118,92, as the click-away check above uses).
+  // above the submenu gutter.
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
   application.processEvents();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(118, 92));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(60, 43));
   application.processEvents();
 
   // A shallow drag, with the stale Shift the compositor still reports. It must
@@ -2614,6 +2659,58 @@ bool runEyedropperSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** Diagonal submenu approaches must not dismiss an already-open popover. */
+bool runSubmenuSelectionTriangleSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(700, 500), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
+  application.processEvents();
+
+  QTest::mouseMove(&editor, QPoint(435, 43), 10);
+  application.processEvents();
+  if (!editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Hovering the palette button did not open its submenu");
+    return false;
+  }
+
+  QTest::mouseMove(&editor, QPoint(417, 53), 10);
+  application.processEvents();
+  if (!editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Diagonal movement inside the submenu triangle closed the palette");
+    return false;
+  }
+
+  QTest::mouseMove(&editor, QPoint(350, 78), 10);
+  application.processEvents();
+  if (!editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Moving from the submenu triangle into the palette closed it");
+    return false;
+  }
+
+  QTest::mouseMove(&editor, QPoint(180, 43), 10);
+  application.processEvents();
+  if (editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Movement away from the submenu triangle kept the palette open");
+    return false;
+  }
+
+  editor.close();
+  return true;
+}
+
 /** Runs the interaction and rendering smoke checks. */
 bool runEllipseRenderingCheck(QString &error) {
   error = QStringLiteral("Ellipse rendering check failed");
@@ -2773,8 +2870,8 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // The toolbar button arms the tool too: ninth slot of 36 px buttons with
-  // 4 px gaps, the 840 px bar (kToolbarWidth) scaled to fit the 800 px window.
+  // The grouped shape submenu arms the ellipse tool without a separate
+  // top-level toolbar slot.
   QTest::keyClick(&editor, Qt::Key_Escape);
   application.processEvents();
   if (editor.cursor().shape() != Qt::ArrowCursor) {
@@ -2784,13 +2881,20 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
   constexpr qreal toolbarWidth = 840.0;
   const qreal scale = std::min<qreal>(1.0, (800.0 - 16.0) / toolbarWidth);
   const qreal toolbarX = (800.0 - toolbarWidth * scale) / 2.0;
-  const QPointF button(toolbarX + (8 * 40 + 18) * scale,
-                       105 - 36 * scale - 10 + 18 * scale);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, button.toPoint());
+  const QPointF button(toolbarX + (6 * 40 + 18) * scale,
+                       105 - 36 * scale - 46 + 18 * scale);
+  QTest::mouseMove(&editor, button.toPoint(), 10);
+  application.processEvents();
+  if (!editor.shapeMenuOpenForTest()) {
+    error = QStringLiteral("Hovering the shape button did not open its submenu");
+    return false;
+  }
+  const QPoint ellipseButton(qRound(button.x() - 2), qRound(button.y() + 36));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, ellipseButton);
   QTest::mouseMove(&editor, QPoint(300, 300), 20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::CrossCursor) {
-    error = QStringLiteral("Ellipse toolbar button did not arm the tool");
+    error = QStringLiteral("Ellipse submenu button did not arm the tool");
     return false;
   }
 
@@ -3045,8 +3149,8 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   constexpr qreal toolbarWidth = 840.0; // kToolbarWidth in editor.cpp
   const qreal scale = std::min<qreal>(1.0, (800.0 - 16.0) / toolbarWidth);
   const qreal toolbarX = (800.0 - toolbarWidth * scale) / 2.0;
-  const QPointF button(toolbarX + (7 * 40 + 18) * scale,
-                       105 - 36 * scale - 10 + 18 * scale);
+  const QPointF button(toolbarX + (6 * 40 + 18) * scale,
+                       105 - 36 * scale - 46 + 18 * scale);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, button.toPoint());
   application.processEvents();
   drag(QPoint(500, 480), QPoint(600, 500));
@@ -3240,6 +3344,26 @@ bool runTextPillRenderingCheck(QString &error) {
     return false;
   }
 
+  Annotation multiline = text;
+  multiline.text = QStringLiteral("Readable\nsecond line");
+  multiline.textBackground = TextBackground::Pill;
+  const QRectF multilineBounds = annotationTextBounds(multiline);
+  if (multilineBounds.height() <= pill.height() ||
+      multilineBounds.width() <= pill.width()) {
+    error = QStringLiteral("Multiline text bounds did not include every line");
+    return false;
+  }
+  const QImage multilineImage = renderCapture(
+      capture, QRectF(0, 0, 300, 100), {multiline}, BackgroundStyle::None);
+  const QPoint secondLinePill(qRound(multilineBounds.left() + 2),
+                              qRound(text.start.y() +
+                                     QFontMetricsF(annotationTextFont(text.size))
+                                         .lineSpacing()));
+  if (multilineImage.pixelColor(secondLinePill) != QColor(248, 245, 235)) {
+    error = QStringLiteral("Multiline text pill did not cover the second line");
+    return false;
+  }
+
   // The selection box follows the pill, so a rounded background does not sit
   // inside a square dashed frame.
   Annotation pilled = text;
@@ -3310,7 +3434,7 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
     QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, at);
     application.processEvents();
     QTest::keyClicks(QApplication::focusWidget(), content);
-    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return, Qt::ControlModifier);
     application.processEvents();
   };
 
@@ -3361,7 +3485,7 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
   application.processEvents();
   QTest::keyClick(QApplication::focusWidget(), Qt::Key_End); // text is selected
   QTest::keyClicks(QApplication::focusWidget(), QStringLiteral(" text"));
-  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return, Qt::ControlModifier);
   application.processEvents();
   const Annotation plainEdited =
       text({200, 295}, QStringLiteral("Plain text"), TextBackground::Plain);
@@ -4636,6 +4760,10 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 107;
   }
+  if (!runSubmenuSelectionTriangleSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 124;
+  }
   if (!runLayerHandlesSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 120;
@@ -5180,8 +5308,9 @@ int main(int argc, char **argv) {
     return 48;
   const QImage beforeTextSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_T);
-  // Text size panel under the Text toolbar button (shifted by Highlighter).
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(341, 133));
+  // Text size options appear when the text button is hovered.
+  QTest::mouseMove(&editor, QPoint(398, 43), 10);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(359, 78));
   QWheelEvent textSizeWheel(QPointF(360, 320), QPointF(360, 320), {}, {0, -120},
                             Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
                             false);
@@ -5196,7 +5325,7 @@ int main(int argc, char **argv) {
   if (!editor.grab().save(outputRoot + QStringLiteral("-text-inline.png"),
                           "PNG"))
     return 19;
-  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+  QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return, Qt::ControlModifier);
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-text-committed.png"),
                           "PNG") ||
@@ -5245,7 +5374,7 @@ int main(int argc, char **argv) {
       QApplication::focusWidget() != &editor) {
     QTest::keyClicks(QApplication::focusWidget(),
                      QStringLiteral("Edited Neucha"));
-    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return, Qt::ControlModifier);
   } else {
     return 22;
   }
@@ -5254,16 +5383,16 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (flushedSnapshot(editor, snapshotPath) == beforeBackdropSnapshot)
     return 55;
-  // Palette toolbar button (index 8 after Highlighter was inserted).
-  QTest::mouseMove(&editor, QPoint(398, 92), 20);
+  // Palette toolbar button after the grouped shape controls.
+  QTest::mouseMove(&editor, QPoint(435, 43), 20);
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-palette.png"), "PNG"))
     return 14;
   // Custom color control in the open palette strip.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(470, 134));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(531, 81));
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(320, 200));
   // Freehand toolbar button.
-  QTest::mouseMove(&editor, QPoint(198, 92), 20);
+  QTest::mouseMove(&editor, QPoint(130, 43), 20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor)
     return 12;
@@ -5420,13 +5549,13 @@ int main(int argc, char **argv) {
   compactToolbarEditor.resize(720, 600);
   compactToolbarEditor.show();
   application.processEvents();
-  QTest::mouseMove(&compactToolbarEditor, QPoint(20, 45), 20);
+  QTest::mouseMove(&compactToolbarEditor, QPoint(20, 25), 20);
   application.processEvents();
-  QTest::mouseMove(&compactToolbarEditor, QPoint(700, 45), 20);
+  QTest::mouseMove(&compactToolbarEditor, QPoint(700, 25), 20);
   application.processEvents();
   const QImage compactToolbarUi = compactToolbarEditor.grab().toImage();
-  if (compactToolbarUi.pixelColor(20, 45).alpha() < 240 ||
-      compactToolbarUi.pixelColor(700, 45).alpha() < 240 ||
+  if (compactToolbarUi.pixelColor(20, 25).alpha() < 240 ||
+      compactToolbarUi.pixelColor(700, 25).alpha() < 240 ||
       !compactToolbarUi.save(
           outputRoot + QStringLiteral("-compact-toolbar.png"), "PNG"))
     return 83;

@@ -21,7 +21,7 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
   editable Neucha text (on a readability pill), and secure redaction with opaque or
   randomized non-spatial mosaic output.
 - Per-layer preset or custom colors (including highlighter ink), undo/redo history,
-  OCR-region capture,
+  one-click whole-image OCR,
   mesh-gradient backdrops, and rendered drop shadows.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
@@ -264,14 +264,14 @@ Install the corresponding Tesseract language data before adding a language to
 | `F` | Freehand stroke |
 | `I` | Eyedropper in the color popover · sample the image as the custom color |
 | `C` | Numbered marker |
-| `R` | Rectangle; press again to toggle filled/hollow; `Alt`+wheel rounds the corners |
-| `E` | Ellipse; press again to toggle filled/hollow |
+| `R` | Rectangle; hover the shape button for rectangle, ellipse, and fill controls; `Alt`+wheel rounds corners |
+| `E` | Ellipse; shares the shape submenu and filled/hollow toggle |
 | `D` | Redact; press again to toggle randomized pixelation or solid redaction |
-| `X` | Cut out a band; drag across the image to remove and collapse a horizontal or vertical strip |
-| `T` | Neucha text on a cream readability pill; press again to toggle the pill (with a text layer selected, toggles that layer) |
-| `O` | Drag an OCR region and copy recognized text |
+| `X` | Cut out a band; drag to preview the crossed-out strip, then release to remove and collapse it |
+| `T` | Neucha text on a cream readability pill; Enter adds a line, clicking away keeps the text; press T again to toggle the pill |
+| `O` | Recognize and copy all text in the current image |
 | `B` | Cycle backdrop |
-| `1`–`6` | Set annotation color |
+| `1`–`8` | Set annotation color; `7` is black and `8` is white |
 | Wheel | Scale selected layer, magnify the spotlight under the cursor, or change active tool size (`Alt`+wheel: rectangle corner radius or spotlight border); while just viewing a zoomed capture, scroll it like a document |
 | `Shift`+wheel | Scroll a zoomed capture sideways (a wide stitch); never changes the zoom |
 | `Ctrl`+wheel · middle-drag | Zoom about the cursor · pan by dragging |

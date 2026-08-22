@@ -47,9 +47,15 @@ QFont annotationTextFont(qreal size) {
 
 QRectF annotationTextBounds(const Annotation &annotation) {
   const QFontMetricsF metrics(annotationTextFont(annotation.size));
+  const QStringList lines = annotation.text.split('\n');
+  qreal widestLine = 0.0;
+  for (const QString &line : lines)
+    widestLine = std::max(widestLine, metrics.horizontalAdvance(line));
   const QRectF glyphs(
       annotation.start.x(), annotation.start.y() - metrics.ascent(),
-      metrics.horizontalAdvance(annotation.text), metrics.height());
+      widestLine,
+      metrics.height() +
+          std::max<qsizetype>(0, lines.size() - 1) * metrics.lineSpacing());
   if (annotation.textBackground != TextBackground::Pill)
     return glyphs;
   // The pill has even side/top padding and a bottom pad that grows with the
@@ -378,7 +384,11 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   painter.setFont(font);
   painter.setPen(annotation.color);
   painter.setBrush(Qt::NoBrush);
-  painter.drawText(annotation.start, annotation.text);
+  const QFontMetricsF metrics(font);
+  const QStringList lines = annotation.text.split('\n');
+  for (qsizetype index = 0; index < lines.size(); ++index)
+    painter.drawText(annotation.start + QPointF(0, index * metrics.lineSpacing()),
+                     lines.at(index));
 }
 
 quint32 nextRedactionRandom(quint32 &state) {

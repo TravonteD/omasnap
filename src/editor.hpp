@@ -6,7 +6,7 @@
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
-#include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPixmap>
 #include <QLineF>
 #include <QTimer>
@@ -218,6 +218,14 @@ public:
   [[nodiscard]] bool selectionFadedForTest() const {
     return adjustingSelection_;
   }
+  [[nodiscard]] bool colorPaletteOpenForTest() const {
+    return colorPaletteOpen_;
+  }
+  [[nodiscard]] bool customColorPickerOpenForTest() const {
+    return customColorPickerOpen_;
+  }
+  [[nodiscard]] bool shapeMenuOpenForTest() const { return shapeMenuOpen_; }
+  [[nodiscard]] bool textSizeMenuOpenForTest() const { return textSizeMenuOpen_; }
 
 private:
   /// What the armed tool is currently set to, for the status line: shown on
@@ -244,6 +252,7 @@ private:
                                            const QPointF &second) const;
   [[nodiscard]] QRectF colorPaletteRect() const;
   [[nodiscard]] QRectF customColorPanelRect() const;
+  [[nodiscard]] QRectF shapeMenuRect() const;
   [[nodiscard]] QRectF textSizePanelRect() const;
   [[nodiscard]] QVector<QRectF> cropHandleRects() const;
   [[nodiscard]] int cropHandleAt(const QPointF &point) const;
@@ -310,7 +319,7 @@ private:
   void paintEdit(QPainter &painter);
   void paintSelect(QPainter &painter);
   void refreshBackdropCache();
-  void refreshComposedCapture(const CutOp *liveCut = nullptr);
+  void refreshComposedCapture();
   void runOcr(const QRectF &localSelection = {});
   void setStatus(QString status);
   void toggleShapeFill();
@@ -361,9 +370,8 @@ private:
   QVector<QPointF> freehandPoints_;
   // Cut tool live-drag state. cutDragStart_/cutBandLo_/cutBandHi_ and
   // liveCut_.orientation are in annotation space (selection-relative logical
-  // px); cutDragRatio_/cutDragOriginOffset_ are cached once the drag axis
-  // locks so later moves (which recompose a shrinking capture_ each frame)
-  // don't re-derive them from a live preview that has already collapsed.
+  // px); the source stays untouched while a shaded removal band previews the
+  // drag, and the cut is applied only when the pointer is released.
   bool cutDragActive_ = false;
   QPointF cutDragStart_;
   CutOp liveCut_;
@@ -371,13 +379,17 @@ private:
   qreal cutBandHi_ = 0.0;
   qreal cutDragRatio_ = 1.0;
   qreal cutDragOriginOffset_ = 0.0;
-  QImage committedCutSource_;
-  QSize committedCutLogicalSize_;
   bool windowMode_ = false;
   BackgroundStyle backgroundStyle_ = BackgroundStyle::None;
   bool busy_ = false;
   bool colorPaletteOpen_ = false;
   bool customColorPickerOpen_ = false;
+  bool shapeMenuOpen_ = false;
+  bool textSizeMenuOpen_ = false;
+  QPointF paletteIntentOrigin_;
+  QPointF customColorIntentOrigin_;
+  QPointF shapeIntentOrigin_;
+  QPointF textSizeIntentOrigin_;
   bool usingCustomColor_ = false;
   int hoveredWindow_ = -1;
   int colorIndex_ = 0;
@@ -461,7 +473,7 @@ private:
   qreal textSize_ = 4.0;
   QElapsedTimer escapeTimer_;
   /// The inline editor's pill and caret are painted by the editor itself
-  /// (the QLineEdit stays transparent with its own caret hidden) so the
+  /// (the multiline editor stays transparent with its own caret hidden) so the
   /// caret can be shorter than Neucha's tall line box.
   bool textEditPill_ = false;
   bool textCaretOn_ = true;
