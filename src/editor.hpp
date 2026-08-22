@@ -321,6 +321,8 @@ private:
   void refreshBackdropCache();
   void refreshComposedCapture();
   void runOcr(const QRectF &localSelection = {});
+  void dismissOcrOverlay();
+  void paintOcrOverlay(QPainter &painter, const QRectF &image, qreal scale);
   void setStatus(QString status);
   void toggleShapeFill();
   void toggleTextBackground();
@@ -489,6 +491,14 @@ private:
   QPointF panAnchor_;
   QColor textColor_;
   QFutureWatcher<OcrResult> ocrWatcher_;
+  /// The region being read (annotation coordinates). While tesseract runs a
+  /// scan band sweeps it; once done the recognized text sits over it for a
+  /// few seconds (or until the next click/key) so you can see what was copied.
+  QRectF ocrRegion_;
+  QString ocrResultText_;
+  QElapsedTimer ocrClock_;
+  QTimer ocrAnimTimer_;
+  QTimer ocrResultTimer_;
 };
 
 [[nodiscard]] QPointF constrainedCreationEndpoint(CaptureEditor::Tool tool,

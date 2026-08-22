@@ -19,6 +19,7 @@
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -614,18 +615,36 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
         update();
       });
 
+  ocrAnimTimer_.setInterval(16);
+  connect(&ocrAnimTimer_, &QTimer::timeout, this, [this] { update(); });
+  ocrResultTimer_.setSingleShot(true);
+  ocrResultTimer_.setInterval(6000);
+  connect(&ocrResultTimer_, &QTimer::timeout, this,
+          [this] { dismissOcrOverlay(); });
   connect(&ocrWatcher_, &QFutureWatcher<OcrResult>::finished, this, [this] {
     const OcrResult result = ocrWatcher_.result();
     busy_ = false;
     if (!result.error.isEmpty()) {
+      dismissOcrOverlay();
       setStatus(result.error);
       return;
     }
     QString clipboardError;
     if (!copyTextToClipboard(result.text, clipboardError)) {
+      dismissOcrOverlay();
       setStatus(clipboardError);
       return;
     }
+    const QString shown = result.text.trimmed();
+    if (shown.isEmpty()) {
+      dismissOcrOverlay();
+      setStatus(QStringLiteral("No text found in that area"));
+      return;
+    }
+    // Keep the animation clock ticking so the result card can fade out.
+    ocrResultText_ = shown;
+    ocrClock_.restart();
+    ocrResultTimer_.start();
     setStatus(QStringLiteral("OCR copied to clipboard"));
     sendCaptureNotification(QStringLiteral("Copied text from screenshot"));
   });
@@ -2530,6 +2549,11 @@ void CaptureEditor::runOcr(const QRectF &localSelection) {
   if (target.width() < 2 || target.height() < 2)
     return;
   busy_ = true;
+  ocrRegion_ = target.translated(-selection_.topLeft());
+  ocrResultText_.clear();
+  ocrResultTimer_.stop();
+  ocrClock_.start();
+  ocrAnimTimer_.start();
   setStatus(QStringLiteral("Reading selected text…"));
 
   QVector<Annotation> ocrAnnotations;
@@ -2559,6 +2583,117 @@ void CaptureEditor::runOcr(const QRectF &localSelection) {
       result.text = recognizeText(image, result.error);
     return result;
   }));
+}
+
+void CaptureEditor::dismissOcrOverlay() {
+  ocrAnimTimer_.stop();
+  ocrResultTimer_.stop();
+  ocrRegion_ = QRectF();
+  ocrResultText_.clear();
+  update();
+}
+
+void CaptureEditor::paintOcrOverlay(QPainter &painter, const QRectF &image,
+                                    qreal scale) {
+  if (ocrRegion_.isEmpty())
+    return;
+  const QRectF region(image.topLeft() + ocrRegion_.topLeft() * scale,
+                      ocrRegion_.size() * scale);
+  const QColor accent(QStringLiteral("#0a84ff"));
+  painter.save();
+  if (ocrResultText_.isEmpty()) {
+    // Scanning: a tinted box with a bright band sweeping top to bottom, the
+    // way a flatbed reads a page. Purely decorative; tesseract sets the pace.
+    constexpr qreal kPeriodMs = 1200.0;
+    const qreal t = std::fmod(static_cast<qreal>(ocrClock_.elapsed()),
+                              kPeriodMs) /
+                    kPeriodMs;
+    const qreal bandHeight = std::clamp(region.height() * 0.35, 18.0, 64.0);
+    const qreal y = region.top() - bandHeight + t * (region.height() + bandHeight);
+    painter.setClipRect(region);
+    painter.fillRect(region, QColor(accent.red(), accent.green(), accent.blue(), 36));
+    QLinearGradient gradient(0, y, 0, y + bandHeight);
+    gradient.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), 0));
+    gradient.setColorAt(0.8, QColor(accent.red(), accent.green(), accent.blue(), 130));
+    gradient.setColorAt(1.0, QColor(255, 255, 255, 230));
+    painter.fillRect(QRectF(region.left(), y, region.width(), bandHeight),
+                     gradient);
+    painter.setClipping(false);
+    painter.setPen(QPen(accent, 1.5));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(region);
+    painter.restore();
+    return;
+  }
+
+  // Result: the recognized text on a card anchored to the region, fading out
+  // over the last part of its display time.
+  constexpr int kFadeMs = 450;
+  const int remaining = ocrResultTimer_.remainingTime();
+  const qreal opacity =
+      remaining < 0 ? 1.0 : std::clamp(remaining / qreal(kFadeMs), 0.0, 1.0);
+  painter.setOpacity(opacity);
+
+  QFont font(QStringLiteral("Noto Sans"));
+  font.setPixelSize(13);
+  painter.setFont(font);
+  const QFontMetricsF metrics(font);
+  constexpr qreal kPad = 12.0;
+  constexpr qreal kHeaderGap = 6.0;
+  // The card sits beside the image, not over it: in the gap to the right of
+  // the image when there is room, otherwise pinned to the right edge of the
+  // screen so the capture stays readable underneath.
+  constexpr qreal kMargin = 12.0;
+  constexpr qreal kGap = 16.0;
+  const qreal rightGap = width() - image.right() - kMargin - kGap;
+  const bool besideImage = rightGap >= 220.0;
+  const qreal cardWidth =
+      besideImage ? std::min(rightGap, 460.0)
+                  : std::clamp(width() * 0.3, 260.0,
+                               std::max(260.0, width() - 2 * kMargin));
+  const qreal textWidth = cardWidth - 2 * kPad;
+  const qreal maxTextHeight =
+      std::max(metrics.lineSpacing() * 2, height() - 128 - 2 * kPad);
+  const int flags = Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap;
+  QRectF textBounds = metrics.boundingRect(
+      QRectF(0, 0, textWidth, maxTextHeight), flags, ocrResultText_);
+  const bool truncated = textBounds.height() > maxTextHeight;
+  textBounds.setHeight(std::min(textBounds.height(), maxTextHeight));
+
+  QFont headerFont = font;
+  headerFont.setPixelSize(11);
+  const qreal headerHeight = QFontMetricsF(headerFont).height();
+  const qreal cardHeight =
+      kPad + headerHeight + kHeaderGap + textBounds.height() + kPad;
+  const qreal x = besideImage ? image.right() + kGap
+                              : width() - cardWidth - kMargin;
+  qreal y = std::max(region.top(), 68.0);
+  if (y + cardHeight > height() - 60)
+    y = std::max(68.0, height() - 60 - cardHeight);
+  const QRectF card(x, y, cardWidth, cardHeight);
+
+  painter.setPen(QPen(QColor(255, 255, 255, 40), 1));
+  painter.setBrush(QColor(18, 18, 22, 240));
+  painter.drawRoundedRect(card, 10, 10);
+  painter.setPen(QPen(accent, 1.5));
+  painter.setBrush(Qt::NoBrush);
+  painter.drawRect(region);
+
+  painter.setFont(headerFont);
+  painter.setPen(QColor(accent.red(), accent.green(), accent.blue(), 255));
+  painter.drawText(QRectF(card.left() + kPad, card.top() + kPad, textWidth,
+                          headerHeight),
+                   Qt::AlignLeft | Qt::AlignVCenter,
+                   truncated ? QStringLiteral("Copied to clipboard · shown in part")
+                             : QStringLiteral("Copied to clipboard"));
+  painter.setFont(font);
+  painter.setPen(QColor(QStringLiteral("#f5f5f7")));
+  const QRectF textRect(card.left() + kPad,
+                        card.top() + kPad + headerHeight + kHeaderGap,
+                        textWidth, textBounds.height());
+  painter.setClipRect(textRect);
+  painter.drawText(textRect, flags, ocrResultText_);
+  painter.restore();
 }
 
 void CaptureEditor::finish(OutputMode mode) {
@@ -2733,6 +2868,16 @@ void CaptureEditor::handleToolbar(const QString &action) {
 
 void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   modifiersSeen_ = true;
+  if (!ocrResultText_.isEmpty()) {
+    const int key = event->key();
+    const bool modifierOnly = key == Qt::Key_Shift || key == Qt::Key_Control ||
+                              key == Qt::Key_Alt || key == Qt::Key_Meta;
+    if (!modifierOnly)
+      dismissOcrOverlay();
+    // Esc only puts the card away; it should not also back out of the tool.
+    if (key == Qt::Key_Escape)
+      return;
+  }
   const Tool toolBefore = tool_;
   const QString statusBefore = status_;
   if (capturePending_) {
@@ -3340,6 +3485,8 @@ void CaptureEditor::mouseDoubleClickEvent(QMouseEvent *event) {
 void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   if (busy_ || capturePending_)
     return;
+  if (!ocrResultText_.isEmpty())
+    dismissOcrOverlay();
   if (event->button() == Qt::RightButton) {
     if (phase_ == Phase::Select) {
       if (dragging_) {
@@ -4470,6 +4617,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     painter.setOpacity(1.0);
   }
   painter.restore();
+  paintOcrOverlay(painter, image, editScale());
 
   if (tool_ == Tool::Select) {
     painter.setPen(QPen(QColor(QStringLiteral("#0a84ff")), 1, Qt::DashLine));

@@ -21,7 +21,8 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
   editable Neucha text (on a readability pill), and secure redaction with opaque or
   randomized non-spatial mosaic output.
 - Per-layer preset or custom colors (including highlighter ink), undo/redo history,
-  one-click whole-image OCR,
+  one-click whole-image or drag-region OCR (the recognized text is shown beside
+  the image and copied to the clipboard),
   mesh-gradient backdrops, and rendered drop shadows.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
