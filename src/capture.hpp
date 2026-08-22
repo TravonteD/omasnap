@@ -115,7 +115,7 @@ enum class AnnotationLayer { Redaction, Default };
 /**
  * Discovers the focused monitor (name, geometry, scale). Fast: only one
  * `hyprctl monitors` call. Safe to call on the main thread to position the
- * overlay before the pixel capture itself runs in the background.
+ * overlay after the pixel capture has already produced a frozen frame.
  */
 [[nodiscard]] bool probeFocusedMonitor(MonitorInfo &monitor, QString &error);
 /**

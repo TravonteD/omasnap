@@ -86,6 +86,7 @@ hl.layer_rule({
   match = { namespace = "^omasnap$" },
   no_anim = true,
   animation = "none",
+  no_screen_share = true,
 })
 ```
 

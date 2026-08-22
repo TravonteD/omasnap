@@ -316,14 +316,30 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Fullscreen quick output never shows an overlay: the capture runs in the
-  // background and the result is written out without opening the editor UI.
+  // Grab the output before the layer exists. ext-image-copy-capture waits for
+  // a composited frame, so mapping the dim overlay first photographs the veil.
   const bool instantFullscreenOutput =
       !editingImage && captureMode == CaptureEditor::CaptureMode::Fullscreen &&
       quickOutputMode != QuickOutputMode::None;
-  const QuickOutputMode editorQuickOutput = instantFullscreenOutput
-                                                ? QuickOutputMode::None
-                                                : quickOutputMode;
+  if (!editingImage &&
+      !captureMonitorPixels(capture.monitor, capture,
+                            !instantFullscreenOutput, error)) {
+    qCritical().noquote() << error;
+    sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
+    return 1;
+  }
+
+  if (instantFullscreenOutput) {
+    QString outputError;
+    if (!quickOutput(renderCapture(capture,
+                                   QRectF(QPointF(), capture.previewSize), {},
+                                   BackgroundStyle::None),
+                     quickOutputMode, outputError)) {
+      qCritical().noquote() << outputError;
+      return 1;
+    }
+    return 0;
+  }
 
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {
@@ -333,74 +349,41 @@ int main(int argc, char **argv) {
     }
   }
 
-  CaptureEditor editor(std::move(capture), captureMode, editorQuickOutput,
-                       restoredLog);
-  if (instantFullscreenOutput)
-    editor.setSuppressSnapshots(true);
-  QObject::connect(&editor, &CaptureEditor::captureReady, &editor,
-                   [&editor, instantFullscreenOutput, quickOutputMode](
-                       bool ok, const QString &error) {
-                     if (!ok) {
-                       sendCaptureNotification(
-                           QStringLiteral("Screenshot failed: %1").arg(error));
-                       QCoreApplication::exit(1);
-                       return;
-                     }
-                     const CaptureData &data = editor.captureData();
-                     if (instantFullscreenOutput) {
-                       QString outputError;
-                       if (!quickOutput(
-                               renderCapture(
-                                   data,
-                                   QRectF(QPointF(), data.previewSize), {},
-                                   BackgroundStyle::None),
-                               quickOutputMode, outputError)) {
-                         qCritical().noquote() << outputError;
-                         QCoreApplication::exit(1);
-                         return;
-                       }
-                       QCoreApplication::quit();
-                       return;
-                     }
-                     qInfo().noquote() << QStringLiteral(
-                         "Captured %1 workspace %2 with %3 selectable windows")
-                                              .arg(data.monitor.name)
-                                              .arg(data.monitor.workspaceId)
-                                              .arg(data.windows.size());
-                   });
-
-  if (!instantFullscreenOutput) {
-    editor.setScreen(targetScreen);
-    editor.setGeometry(targetScreen->geometry());
-    editor.winId();
-    QWindow *window = editor.windowHandle();
-    LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
-    if (!window || !layerWindow) {
-      qCritical() << "Could not create capture overlay layer";
-      return 1;
-    }
-    layerWindow->setScope(QStringLiteral("omasnap"));
-    layerWindow->setScreen(targetScreen);
-    layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
-    LayerShellQt::Window::Anchors anchors;
-    anchors.setFlag(LayerShellQt::Window::AnchorTop);
-    anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-    anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-    anchors.setFlag(LayerShellQt::Window::AnchorRight);
-    layerWindow->setAnchors(anchors);
-    layerWindow->setExclusiveZone(-1);
-    layerWindow->setKeyboardInteractivity(
-        LayerShellQt::Window::KeyboardInteractivityExclusive);
-    layerWindow->setActivateOnShow(true);
-    editor.show();
-    editor.setFocus(Qt::ActiveWindowFocusReason);
-  }
-
   if (!editingImage) {
-    // The quick fullscreen path never shows the overlay, so it never needs the
-    // window list that only window-mode hover consumes.
-    editor.startCapture(captureMode, !instantFullscreenOutput);
+    qInfo().noquote() << QStringLiteral(
+                             "Captured %1 workspace %2 with %3 selectable "
+                             "windows")
+                             .arg(capture.monitor.name)
+                             .arg(capture.monitor.workspaceId)
+                             .arg(capture.windows.size());
   }
+
+  CaptureEditor editor(std::move(capture), captureMode, quickOutputMode,
+                       restoredLog);
+  editor.setScreen(targetScreen);
+  editor.setGeometry(targetScreen->geometry());
+  editor.winId();
+  QWindow *window = editor.windowHandle();
+  LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
+  if (!window || !layerWindow) {
+    qCritical() << "Could not create capture overlay layer";
+    return 1;
+  }
+  layerWindow->setScope(QStringLiteral("omasnap"));
+  layerWindow->setScreen(targetScreen);
+  layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
+  LayerShellQt::Window::Anchors anchors;
+  anchors.setFlag(LayerShellQt::Window::AnchorTop);
+  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
+  anchors.setFlag(LayerShellQt::Window::AnchorLeft);
+  anchors.setFlag(LayerShellQt::Window::AnchorRight);
+  layerWindow->setAnchors(anchors);
+  layerWindow->setExclusiveZone(-1);
+  layerWindow->setKeyboardInteractivity(
+      LayerShellQt::Window::KeyboardInteractivityExclusive);
+  layerWindow->setActivateOnShow(true);
+  editor.show();
+  editor.setFocus(Qt::ActiveWindowFocusReason);
 
   return application.exec();
 }
