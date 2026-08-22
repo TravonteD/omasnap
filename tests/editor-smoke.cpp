@@ -4711,6 +4711,47 @@ int main(int argc, char **argv) {
   QApplication application(argc, argv);
   if (!loadCaptureFonts())
     return 17;
+
+  // Live output capture against a real compositor (the smoke's own Wayland
+  // connection; Qt's platform does not matter): open a session on the named
+  // output and grab several frames through the same buffer, timing them,
+  // since scroll capture needs many per second.
+  const QString liveOutputName = qEnvironmentVariable("OMASNAP_SMOKE_OUTPUT");
+  if (!liveOutputName.isEmpty()) {
+    OutputCapture output;
+    QString outputError;
+    if (!output.open(liveOutputName, outputError)) {
+      qWarning().noquote() << outputError;
+      return 105;
+    }
+    QImage frame;
+    QElapsedTimer stopwatch;
+    for (int index = 0; index < 5; ++index) {
+      stopwatch.start();
+      if (!output.grab(frame, outputError)) {
+        qWarning().noquote() << outputError;
+        return 105;
+      }
+      if (frame.isNull() || frame.size() != output.bufferSize()) {
+        qWarning().noquote() << QStringLiteral(
+            "Output frame size does not match the announced buffer");
+        return 105;
+      }
+      qInfo().noquote() << QStringLiteral("output %1 frame %2: %3x%4 in %5 ms")
+                               .arg(liveOutputName)
+                               .arg(index + 1)
+                               .arg(frame.width())
+                               .arg(frame.height())
+                               .arg(stopwatch.elapsed());
+    }
+    const QString liveRoot =
+        argc > 1 ? QString::fromLocal8Bit(argv[1])
+                 : QDir(QDir::tempPath())
+                       .filePath(QStringLiteral("omasnap-native-smoke"));
+    if (!frame.save(liveRoot + QStringLiteral("-native-output.png"), "PNG"))
+      return 105;
+    return 0;
+  }
   QString snapshotError;
   if (!runPositionalImageTargetCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
