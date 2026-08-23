@@ -225,6 +225,17 @@ public:
     return customColorPickerOpen_;
   }
   [[nodiscard]] bool shapeMenuOpenForTest() const { return shapeMenuOpen_; }
+  /// Whether window selection is active in the select phase. Test accessor.
+  [[nodiscard]] bool windowModeForTest() const { return windowMode_; }
+  /// Whether the overlay is still in the select phase. Test accessor.
+  [[nodiscard]] bool selectingForTest() const { return phase_ == Phase::Select; }
+  /// Widget rect of the capture-kind tab with `label`, or null. Test accessor.
+  [[nodiscard]] QRectF selectTabRectForTest(const QString &label) const {
+    for (const SelectTabItem &item : selectTabItems())
+      if (selectTabLabel(item.tab) == label)
+        return item.rect;
+    return {};
+  }
   [[nodiscard]] bool textSizeMenuOpenForTest() const { return textSizeMenuOpen_; }
 
 private:
@@ -297,6 +308,19 @@ private:
   void cancelActiveDragForHistory();
   void beginText(const QPointF &point, int annotationIndex = -1);
   void chooseWindow(int index);
+  /// Capture-kind tabs across the top of the select overlay. Region and
+  /// Window are modes (one is always lit); Fullscreen acts at once.
+  enum class SelectTab { Region, Window, Fullscreen };
+  struct SelectTabItem {
+    SelectTab tab;
+    QRectF rect;
+  };
+  [[nodiscard]] static QString selectTabLabel(SelectTab tab);
+  [[nodiscard]] QVector<SelectTabItem> selectTabItems() const;
+  [[nodiscard]] int selectTabAt(const QPointF &position) const;
+  void activateSelectTab(SelectTab tab);
+  void setWindowMode(bool enabled);
+  void selectFullscreen();
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
   void enterEdit(QString status);

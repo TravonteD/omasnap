@@ -3037,13 +3037,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   }
   if (phase_ == Phase::Select) {
     if (event->matches(QKeySequence::SelectAll)) {
-      windowMode_ = false;
-      dragging_ = false;
-      hoveredWindow_ = -1;
-      selection_ = QRectF(QPointF(), capture_.previewSize);
-      enterEdit(QStringLiteral(
-          "Full screen selected · native resolution · outer handles crop"));
-      update();
+      selectFullscreen();
       return;
     }
     const bool directionalKey =
@@ -3084,16 +3078,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       return;
     }
     if (event->key() == Qt::Key_Space) {
-      windowMode_ = !windowMode_;
-      dragging_ = false;
-      selection_ = {};
-      hoveredWindow_ = windowMode_ ? windowAt(cursor_) : -1;
-      setStatus(windowMode_
-                    ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                     "Enter · Space returns to area")
-                    : QStringLiteral(
-                          "Drag to select an area · Space selects a window"));
-      updatePointerCursor();
+      setWindowMode(!windowMode_);
       return;
     }
     QWidget::keyPressEvent(event);
@@ -3351,6 +3336,8 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       hoveredWindow_ = windowAt(cursor_);
     else if (dragging_)
       selection_ = normalizedSelection(dragStart_, cursor_);
+    if (!dragging_)
+      updatePointerCursor();
   } else {
     if (tool_ == Tool::Select && marqueeSelecting_) {
       marqueeRect_ = QRectF(dragStart_, toAnnotationPoint(cursor_)).normalized();
@@ -3667,6 +3654,10 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   cursor_ = event->position();
   endNudgeRun();
   if (phase_ == Phase::Select) {
+    if (const int tab = selectTabAt(cursor_); tab >= 0) {
+      activateSelectTab(selectTabItems().at(tab).tab);
+      return;
+    }
     if (windowMode_) {
       chooseWindow(windowAt(cursor_));
       return;
@@ -4335,7 +4326,8 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
 
 void CaptureEditor::updatePointerCursor() {
   if (phase_ == Phase::Select) {
-    setCursor(windowMode_ ? Qt::PointingHandCursor : Qt::CrossCursor);
+    setCursor(windowMode_ || selectTabAt(cursor_) >= 0 ? Qt::PointingHandCursor
+                                                       : Qt::CrossCursor);
     return;
   }
   if ((colorPaletteOpen_ && colorPaletteRect().contains(cursor_)) ||
@@ -4434,6 +4426,91 @@ void CaptureEditor::refreshBackdropCache() {
   }
 }
 
+QString CaptureEditor::selectTabLabel(SelectTab tab) {
+  switch (tab) {
+  case SelectTab::Region:
+    return QStringLiteral("REGION");
+  case SelectTab::Window:
+    return QStringLiteral("WINDOW");
+  case SelectTab::Fullscreen:
+    return QStringLiteral("FULLSCREEN");
+  }
+  return {};
+}
+
+QVector<CaptureEditor::SelectTabItem> CaptureEditor::selectTabItems() const {
+  if (phase_ != Phase::Select || capture_.source.isNull())
+    return {};
+  static const SelectTab order[] = {SelectTab::Region, SelectTab::Window,
+                                    SelectTab::Fullscreen};
+  QFont tabFont(QStringLiteral("Noto Sans"));
+  tabFont.setBold(true);
+  tabFont.setPixelSize(11);
+  const QFontMetricsF metrics(tabFont);
+  constexpr qreal kPad = 14.0;
+  constexpr qreal kGap = 2.0;
+  constexpr qreal kHeight = 26.0;
+  QVector<SelectTabItem> items;
+  qreal total = 0.0;
+  for (const SelectTab tab : order) {
+    const qreal w = metrics.horizontalAdvance(selectTabLabel(tab)) + 2 * kPad;
+    items.push_back({tab, QRectF(total, 15.0, w, kHeight)});
+    total += w + kGap;
+  }
+  total -= kGap;
+  const qreal left = (width() - total) / 2.0;
+  for (SelectTabItem &item : items)
+    item.rect.translate(left, 0);
+  return items;
+}
+
+int CaptureEditor::selectTabAt(const QPointF &position) const {
+  const QVector<SelectTabItem> items = selectTabItems();
+  for (int index = 0; index < items.size(); ++index) {
+    if (items.at(index).rect.adjusted(-2, -6, 2, 6).contains(position))
+      return index;
+  }
+  return -1;
+}
+
+void CaptureEditor::activateSelectTab(SelectTab tab) {
+  switch (tab) {
+  case SelectTab::Region:
+    setWindowMode(false);
+    break;
+  case SelectTab::Window:
+    setWindowMode(true);
+    break;
+  case SelectTab::Fullscreen:
+    selectFullscreen();
+    break;
+  }
+}
+
+void CaptureEditor::setWindowMode(bool enabled) {
+  windowMode_ = enabled;
+  dragging_ = false;
+  selection_ = {};
+  hoveredWindow_ = windowMode_ ? windowAt(cursor_) : -1;
+  setStatus(windowMode_
+                ? QStringLiteral("Window mode · click or Super+Arrows then "
+                                 "Enter · Space returns to area")
+                : QStringLiteral(
+                      "Drag to select an area · Space selects a window"));
+  updatePointerCursor();
+  update();
+}
+
+void CaptureEditor::selectFullscreen() {
+  windowMode_ = false;
+  dragging_ = false;
+  hoveredWindow_ = -1;
+  selection_ = QRectF(QPointF(), capture_.previewSize);
+  enterEdit(QStringLiteral(
+      "Full screen selected · native resolution · outer handles crop"));
+  update();
+}
+
 void CaptureEditor::paintSelect(QPainter &painter) {
   if (capture_.source.isNull()) {
     painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
@@ -4478,20 +4555,41 @@ void CaptureEditor::paintSelect(QPainter &painter) {
     painter.drawLine(QPointF(0, cursor_.y()), QPointF(width(), cursor_.y()));
   }
 
-  QFont badgeFont(QStringLiteral("Noto Sans"));
-  badgeFont.setBold(true);
-  badgeFont.setPixelSize(11);
-  painter.setFont(badgeFont);
-  const QString badge =
-      windowMode_ ? QStringLiteral("WINDOW  ×") : QStringLiteral("AREA  ×");
-  const int badgeWidth = painter.fontMetrics().horizontalAdvance(badge) + 24;
-  const QRectF badgeRect((width() - badgeWidth) / 2.0, 12, badgeWidth, 32);
-  painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
-  painter.setBrush(QColor(18, 18, 22, 235));
-  painter.drawRoundedRect(badgeRect, 10, 10);
-  painter.setPen(windowMode_ ? QColor(QStringLiteral("#ffd60a"))
+  // Capture-kind tabs. The lit one is the mode the pointer is in; Fullscreen
+  // never lights because it acts the moment it is picked.
+  const QVector<SelectTabItem> tabs = selectTabItems();
+  if (!tabs.isEmpty()) {
+    QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
+                     .adjusted(-4, -4, 4, 4);
+    painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
+    painter.setBrush(QColor(18, 18, 22, 235));
+    painter.drawRoundedRect(bar, 12, 12);
+    QFont tabFont(QStringLiteral("Noto Sans"));
+    tabFont.setBold(true);
+    tabFont.setPixelSize(11);
+    painter.setFont(tabFont);
+    const int hovered = selectTabAt(cursor_);
+    for (int index = 0; index < tabs.size(); ++index) {
+      const SelectTabItem &item = tabs.at(index);
+      const bool active = (item.tab == SelectTab::Window) == windowMode_ &&
+                          item.tab != SelectTab::Fullscreen;
+      painter.setPen(Qt::NoPen);
+      if (active) {
+        painter.setBrush(item.tab == SelectTab::Window
+                             ? QColor(QStringLiteral("#ffd60a"))
                              : QColor(QStringLiteral("#30d158")));
-  painter.drawText(badgeRect, Qt::AlignCenter, badge);
+        painter.drawRoundedRect(item.rect, 9, 9);
+        painter.setPen(QColor(18, 18, 22));
+      } else {
+        if (index == hovered) {
+          painter.setBrush(QColor(255, 255, 255, 28));
+          painter.drawRoundedRect(item.rect, 9, 9);
+        }
+        painter.setPen(QColor(255, 255, 255, index == hovered ? 255 : 190));
+      }
+      painter.drawText(item.rect, Qt::AlignCenter, selectTabLabel(item.tab));
+    }
+  }
   drawHotkeyLegend(painter, rect(), cursor_,
                    {{QStringLiteral("Drag"), QStringLiteral("Area")},
                     {QStringLiteral("Space"), QStringLiteral("Window")},

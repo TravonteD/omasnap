@@ -2037,7 +2037,9 @@ bool runAsyncCaptureRegionSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 30));
+  // y=60 clears the capture-kind tabs, which on a 320 px wide test surface
+  // reach almost edge to edge.
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 60));
   QTest::mouseMove(&editor, QPoint(200, 180), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(200, 180));
@@ -2050,7 +2052,7 @@ bool runAsyncCaptureRegionSmoke(QApplication &application, QString &error) {
   else
     qputenv("OMASNAP_TEST_CAPTURE", oldCapture);
 
-  if (selected.size() != QSize(160, 150)) {
+  if (selected.size() != QSize(160, 120)) {
     error = QStringLiteral("Async capture region selection produced %1x%2")
                 .arg(selected.width())
                 .arg(selected.height());
@@ -4753,6 +4755,60 @@ bool runViewportZoomSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** The capture-kind tabs across the top: clicking Window and Region moves
+ *  between the two modes Space toggles, and Fullscreen selects the monitor the
+ *  way Ctrl+A does. */
+bool runSelectTabsSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+  capture.windows = {{QRect(100, 100, 300, 200), QStringLiteral("w1"),
+                      QStringLiteral("One"), QStringLiteral("firefox")}};
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  const auto click = [&](const QString &label) {
+    const QRectF tab = editor.selectTabRectForTest(label);
+    if (tab.isNull())
+      return false;
+    const QPoint at = tab.center().toPoint();
+    QTest::mouseMove(&editor, at);
+    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, at);
+    application.processEvents();
+    return true;
+  };
+  if (editor.windowModeForTest()) {
+    error = QStringLiteral("Select overlay did not start in region mode");
+    return false;
+  }
+  if (!click(QStringLiteral("WINDOW")) || !editor.windowModeForTest()) {
+    error = QStringLiteral("Window tab did not enter window mode");
+    return false;
+  }
+  if (!click(QStringLiteral("REGION")) || editor.windowModeForTest()) {
+    error = QStringLiteral("Region tab did not return to region mode");
+    return false;
+  }
+  if (!click(QStringLiteral("FULLSCREEN")) || editor.selectingForTest() ||
+      editor.renderCurrentOutput().size() != QSize(800, 600)) {
+    error = QStringLiteral("Fullscreen tab did not select the whole monitor");
+    return false;
+  }
+  if (!editor.selectTabRectForTest(QStringLiteral("REGION")).isNull()) {
+    error = QStringLiteral("Tabs are still offered in the edit phase");
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
 /** Checks that the wheel over a selected layer changes its weight, not its
  *  extent: a stroke gets heavier where it already is, and resizing stays with
  *  the corner handle. */
@@ -5082,6 +5138,10 @@ int main(int argc, char **argv) {
   if (!runLayerWeightSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 118;
+  }
+  if (!runSelectTabsSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 127;
   }
   if (!runAsyncCaptureRegionSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;

@@ -278,14 +278,18 @@ Install the corresponding Tesseract language data before adding a language to
 
 ### Capture selection
 
+Tabs across the top of the overlay switch the capture kind: **Region**,
+**Window**, **Fullscreen**. The keys below do the same without reaching for the
+pointer.
+
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Toggle region/window selection |
+| `Space` | Toggle region/window selection (the Region / Window tabs) |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `SUPER + Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |
-| `Ctrl+A` | Select the full focused monitor |
+| `Ctrl+A` | Select the full focused monitor (the Fullscreen tab) |
 | `Esc`, `Esc` | Dismiss |
 
 ### Annotation editor
