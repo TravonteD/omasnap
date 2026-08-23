@@ -291,6 +291,8 @@ void ScrollCaptureOverlay::rememberRegion() const {
 
 QVector<QRect> ScrollCaptureOverlay::chromeRects() const {
   QVector<QRect> rects;
+  for (const CaptureTab &tab : captureTabLayout(rect()))
+    rects.push_back(tab.rect.toAlignedRect());
   if (phase_ == Phase::Selected) {
     for (int index = 0; index < kModeButtonCount; ++index)
       rects.push_back(modeButtonRect(index));
@@ -1145,14 +1147,10 @@ void ScrollCaptureOverlay::paintEvent(QPaintEvent *) {
       }
     }
   }
-  // The same chrome the capture overlay wears. Once a capture is running the
-  // badge also names the direction, since the pills that said so are gone.
-  const QString badge =
-      phase_ != Phase::Capturing ? QStringLiteral("SCROLL")
-      : mode_ == Mode::Auto      ? QStringLiteral("SCROLL · AUTO")
-                                 : QStringLiteral("SCROLL · MANUAL");
-  drawModeBadge(painter, rect(), badge, QColor(QStringLiteral("#30d158")),
-                &modeBadgeClose_);
+  // The same tab strip every overlay wears, with this kind lit. The other
+  // tabs leave for the area overlay in that mode.
+  drawCaptureTabs(painter, captureTabLayout(rect()), CaptureKind::Scroll,
+                  cursor_);
   drawHotkeyLegend(painter, rect(), cursor_, legendEntries());
   drawStatusPill(painter, rect(), status_);
 }
@@ -1197,9 +1195,11 @@ void ScrollCaptureOverlay::mousePressEvent(QMouseEvent *event) {
   }
   if (event->button() != Qt::LeftButton)
     return;
-  // The badge's × leaves, wherever the shared chrome laid it out this frame.
-  if (modeBadgeClose_.contains(event->position())) {
-    cancel();
+  if (const int tab = captureTabAt(captureTabLayout(rect()), event->position());
+      tab >= 0) {
+    const CaptureKind kind = captureTabLayout(rect()).at(tab).kind;
+    if (kind != CaptureKind::Scroll)
+      switchToArea(kind);
     return;
   }
   if (phase_ == Phase::Capturing) {
@@ -1359,10 +1359,7 @@ void ScrollCaptureOverlay::keyPressEvent(QKeyEvent *event) {
   // means the other kind of capture entirely: hand back to area capture, which
   // relaunches rather than making anyone close this and start again.
   if (phase_ == Phase::Selecting && event->key() == Qt::Key_A) {
-    switchedToArea_ = true;
-    stopWorker();
-    phase_ = Phase::Finished;
-    close();
+    switchToArea(CaptureKind::Region);
     return;
   }
   // A shortcut, never the advertised way: only the pointer being on our own
@@ -1386,8 +1383,19 @@ void ScrollCaptureOverlay::keyPressEvent(QKeyEvent *event) {
   QWidget::keyPressEvent(event);
 }
 
+void ScrollCaptureOverlay::switchToArea(CaptureKind kind) {
+  // Hand back to the area overlay in `kind`, which relaunches rather than
+  // making anyone close this and start again.
+  switchedToArea_ = true;
+  areaKind_ = kind;
+  stopWorker();
+  phase_ = Phase::Finished;
+  close();
+}
+
 QImage runScrollCapture(const MonitorInfo &monitor, QString &error,
-                        bool *switchedToArea, const QRect &initialRegion) {
+                        bool *switchedToArea, const QRect &initialRegion,
+                        CaptureKind *areaKind) {
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {
     if (screen->name() == monitor.name) {
@@ -1431,5 +1439,7 @@ QImage runScrollCapture(const MonitorInfo &monitor, QString &error,
     QApplication::processEvents(QEventLoop::WaitForMoreEvents);
   if (switchedToArea)
     *switchedToArea = overlay.switchedToArea();
+  if (areaKind)
+    *areaKind = overlay.areaKind();
   return overlay.result();
 }

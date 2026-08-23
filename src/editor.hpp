@@ -2,6 +2,7 @@
 
 #include "capture.hpp"
 #include "cut.hpp"
+#include "overlay-chrome.hpp"
 #include "palette-config.hpp"
 
 #include <QElapsedTimer>
@@ -251,8 +252,8 @@ public:
   [[nodiscard]] bool selectingForTest() const { return phase_ == Phase::Select; }
   /// Widget rect of the capture-kind tab with `label`, or null. Test accessor.
   [[nodiscard]] QRectF selectTabRectForTest(const QString &label) const {
-    for (const SelectTabItem &item : selectTabItems())
-      if (selectTabLabel(item.tab) == label)
+    for (const CaptureTab &item : selectTabItems())
+      if (captureTabLabel(item.kind) == label)
         return item.rect;
     return {};
   }
@@ -330,13 +331,8 @@ private:
   void chooseWindow(int index);
   /// Capture-kind tabs across the top of the select overlay. Region and
   /// Window are modes (one is always lit); Fullscreen acts at once.
-  enum class SelectTab { Region, Scroll, Window, Fullscreen };
-  struct SelectTabItem {
-    SelectTab tab;
-    QRectF rect;
-  };
-  [[nodiscard]] static QString selectTabLabel(SelectTab tab);
-  [[nodiscard]] QVector<SelectTabItem> selectTabItems() const;
+  using SelectTab = CaptureKind;
+  [[nodiscard]] QVector<CaptureTab> selectTabItems() const;
   [[nodiscard]] int selectTabAt(const QPointF &position) const;
   void activateSelectTab(SelectTab tab);
   void setWindowMode(bool enabled);

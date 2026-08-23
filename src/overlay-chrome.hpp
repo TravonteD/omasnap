@@ -7,11 +7,30 @@
 #include <QColor>
 #include <QPair>
 #include <QRect>
+#include <QPointF>
 #include <QRectF>
 #include <QString>
 #include <QVector>
 
 class QPainter;
+
+/// The kinds of capture the tab strip across the top offers, on every
+/// overlay. Region and Window are modes of the area overlay, Scroll is the
+/// scroll overlay, and Fullscreen acts at once.
+enum class CaptureKind { Region, Scroll, Window, Fullscreen };
+struct CaptureTab {
+  CaptureKind kind;
+  QRectF rect;
+};
+[[nodiscard]] QString captureTabLabel(CaptureKind kind);
+/// Tab positions for a surface of `bounds`, hanging off the top edge.
+[[nodiscard]] QVector<CaptureTab> captureTabLayout(const QRect &bounds);
+/// Index of the tab under `position`, or -1.
+[[nodiscard]] int captureTabAt(const QVector<CaptureTab> &tabs,
+                               const QPointF &position);
+/// Draws the strip; `active` is lit, the tab under `cursor` is hinted.
+void drawCaptureTabs(QPainter &painter, const QVector<CaptureTab> &tabs,
+                     CaptureKind active, const QPointF &cursor);
 
 /// The badge naming what the overlay is doing, centered at the top, with the ×
 /// that leaves it. Returns the whole badge; `closeRect` is the × alone, for
@@ -22,9 +41,11 @@ QRectF drawModeBadge(QPainter &painter, const QRect &bounds,
 
 /// The two-column key guide, pinned to the top-right corner, and moved to the
 /// left when the pointer is over it, so it never hides what is underneath.
+/// `keepVisible` are points (selected handles) the card must not cover.
 void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
                       const QPointF &cursor,
-                      const QVector<QPair<QString, QString>> &entries);
+                      const QVector<QPair<QString, QString>> &entries,
+                      const QVector<QPointF> &keepVisible = {});
 
 /// The instruction line along the bottom.
 void drawStatusPill(QPainter &painter, const QRect &bounds,

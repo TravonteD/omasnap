@@ -92,6 +92,22 @@ private:
 };
 } // namespace
 
+namespace {
+/// The area overlay mode a tab on the scroll overlay asked for.
+CaptureEditor::CaptureMode areaCaptureMode(CaptureKind kind) {
+  switch (kind) {
+  case CaptureKind::Window:
+    return CaptureEditor::CaptureMode::Window;
+  case CaptureKind::Fullscreen:
+    return CaptureEditor::CaptureMode::Fullscreen;
+  case CaptureKind::Region:
+  case CaptureKind::Scroll:
+    break;
+  }
+  return CaptureEditor::CaptureMode::Region;
+}
+} // namespace
+
 int main(int argc, char **argv) {
   QCoreApplication::setApplicationName(QStringLiteral("omasnap"));
   QCoreApplication::setApplicationVersion(QString::fromLatin1(OMASNAP_VERSION));
@@ -288,11 +304,12 @@ int main(int argc, char **argv) {
       return 1;
     }
     bool switchedToArea = false;
+    CaptureKind areaKind = CaptureKind::Region;
     const QImage stitched =
-        runScrollCapture(probe.monitor, error, &switchedToArea);
+        runScrollCapture(probe.monitor, error, &switchedToArea, {}, &areaKind);
     if (switchedToArea) {
       scrollRequested = false;
-      captureMode = CaptureEditor::CaptureMode::Region;
+      captureMode = areaCaptureMode(areaKind);
     } else if (stitched.isNull()) {
       if (!error.isEmpty()) {
         qCritical().noquote() << error;
@@ -451,8 +468,9 @@ int main(int argc, char **argv) {
       return 1;
     }
     bool backToArea = false;
+    CaptureKind areaKind = CaptureKind::Region;
     const QImage stitched = runScrollCapture(probe.monitor, error, &backToArea,
-                                            editor.scrollRegion());
+                                            editor.scrollRegion(), &areaKind);
     if (backToArea) {
       // Handed straight back: the loop puts the area overlay up again, and A
       // and S can keep passing it between them for as long as anyone likes.
@@ -461,7 +479,7 @@ int main(int argc, char **argv) {
         qCritical().noquote() << error;
         return 1;
       }
-      captureMode = CaptureEditor::CaptureMode::Region;
+      captureMode = areaCaptureMode(areaKind);
       continue;
     }
     if (stitched.isNull()) {

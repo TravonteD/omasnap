@@ -6,6 +6,7 @@
 #include "icons.hpp"
 #include "eyedropper.hpp"
 #include "output-config.hpp"
+#include "overlay-chrome.hpp"
 #include "palette-config.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -395,21 +396,6 @@ QPointF constrainedRedactionEndpoint(const QPointF &candidate,
 /// One top-to-bottom pass of the OCR scan band.
 constexpr qint64 kOcrSweepMs = 1200;
 
-void drawStatusPill(QPainter &painter, const QRect &bounds,
-                    const QString &text) {
-  QFont font(QStringLiteral("Noto Sans"));
-  font.setPixelSize(13);
-  painter.setFont(font);
-  const int width = painter.fontMetrics().horizontalAdvance(text) + 28;
-  const QRectF pill((bounds.width() - width) / 2.0, bounds.height() - 42.0,
-                    width, 30);
-  painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
-  painter.setBrush(QColor(18, 18, 22, 232));
-  painter.drawRoundedRect(pill, 10, 10);
-  painter.setPen(Qt::white);
-  painter.drawText(pill, Qt::AlignCenter, text);
-}
-
 void drawInstantTooltip(QPainter &painter, const QRect &bounds,
                         const QRectF &anchor, const QString &text) {
   if (text.isEmpty())
@@ -480,92 +466,6 @@ void drawMeasureBadge(QPainter &painter, const QRect &bounds,
   painter.drawRoundedRect(pill, 6, 6);
   painter.setPen(Qt::white);
   painter.drawText(pill, Qt::AlignCenter, text);
-}
-
-void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
-                      const QPointF &cursor,
-                      const QVector<QPair<QString, QString>> &entries,
-                      const QVector<QPointF> &keepVisible = {}) {
-  if (entries.isEmpty())
-    return;
-  constexpr int columns = 2;
-  const int rows = (entries.size() + columns - 1) / columns;
-  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-  font.setPixelSize(11);
-  // Measured, not guessed: a fixed-width card clipped the longer lines, and a
-  // guide that trails off mid-word is worse than no guide.
-  const QFontMetricsF metrics(font);
-  constexpr qreal keyGap = 12;    // between a key and what it does
-  constexpr qreal columnGap = 24; // between the two columns
-  constexpr qreal padding = 12;   // card edge to text
-  qreal keyWidth[columns] = {};
-  qreal textWidth[columns] = {};
-  for (int index = 0; index < entries.size(); ++index) {
-    const int column = std::min(index / rows, columns - 1);
-    keyWidth[column] = std::max(
-        keyWidth[column], metrics.horizontalAdvance(entries.at(index).first));
-    textWidth[column] = std::max(
-        textWidth[column], metrics.horizontalAdvance(entries.at(index).second));
-  }
-  qreal columnWidth[columns] = {};
-  qreal width = 2 * padding;
-  for (int column = 0; column < columns; ++column) {
-    if (keyWidth[column] <= 0 && textWidth[column] <= 0)
-      continue;
-    columnWidth[column] = keyWidth[column] + keyGap + textWidth[column];
-    width += columnWidth[column];
-    if (column > 0)
-      width += columnGap;
-  }
-  width = std::min(width, bounds.width() - 28.0);
-  const qreal height = rows * 19 + 24;
-  const QRectF right(bounds.width() - width - 14, 14, width, height);
-  const QRectF left(14, 14, width, height);
-  auto hiddenCount = [&](const QRectF &candidate) {
-    int count = 0;
-    for (const QPointF &point : keepVisible) {
-      if (candidate.contains(point))
-        ++count;
-    }
-    return count;
-  };
-  // Flip away from the pointer, but not onto a selected handle. Adding Cut
-  // grew the card far enough that a line-select click near mid-canvas moved
-  // it over the start handle.
-  const bool cursorWantsLeft =
-      right.adjusted(-28, -28, 28, 28).contains(cursor);
-  QRectF panel = cursorWantsLeft ? left : right;
-  const QRectF other = cursorWantsLeft ? right : left;
-  if (hiddenCount(panel) > hiddenCount(other))
-    panel = other;
-  // The flip exists so the guide never sits on what the pointer is doing.
-  // When both positions would still cover the pointer and no handle pins the
-  // card in place, there is nowhere honest to put it: step aside entirely.
-  // On any real monitor the two positions cannot both reach the pointer.
-  if (keepVisible.isEmpty() &&
-      panel.adjusted(-28, -28, 28, 28).contains(cursor) &&
-      other.adjusted(-28, -28, 28, 28).contains(cursor))
-    return;
-
-  painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
-  painter.setBrush(QColor(13, 15, 20, 224));
-  painter.drawRoundedRect(panel, 11, 11);
-  painter.setFont(font);
-  for (int index = 0; index < entries.size(); ++index) {
-    const int column = std::min(index / rows, columns - 1);
-    const int row = index % rows;
-    qreal x = panel.left() + padding;
-    for (int before = 0; before < column; ++before)
-      x += columnWidth[before] + columnGap;
-    const qreal y = panel.top() + 12 + row * 19;
-    painter.setPen(QColor(QStringLiteral("#a9b6cb")));
-    painter.drawText(QRectF(x, y, keyWidth[column], 18),
-                     Qt::AlignLeft | Qt::AlignVCenter, entries.at(index).first);
-    painter.setPen(QColor(QStringLiteral("#f5f5f7")));
-    painter.drawText(
-        QRectF(x + keyWidth[column] + keyGap, y, textWidth[column], 18),
-        Qt::AlignLeft | Qt::AlignVCenter, entries.at(index).second);
-  }
 }
 
 QString backgroundName(BackgroundStyle style) {
@@ -3145,17 +3045,17 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       // skipped: both act on the spot (capture, or leave for the scroll
       // overlay), and a cycle key that fires them on the way past would be a
       // trap rather than a mode. S still jumps to scroll directly.
-      const QVector<SelectTabItem> tabs = selectTabItems();
+      const QVector<CaptureTab> tabs = selectTabItems();
       int current = -1;
       for (int index = 0; index < tabs.size(); ++index) {
-        if (tabs.at(index).tab ==
+        if (tabs.at(index).kind ==
             (windowMode_ ? SelectTab::Window : SelectTab::Region)) {
           current = index;
           break;
         }
       }
       for (int step = 1; step <= tabs.size(); ++step) {
-        const SelectTab next = tabs.at((current + step) % tabs.size()).tab;
+        const SelectTab next = tabs.at((current + step) % tabs.size()).kind;
         if (next != SelectTab::Fullscreen && next != SelectTab::Scroll) {
           activateSelectTab(next);
           break;
@@ -3738,7 +3638,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   if (const int tab = selectTabAt(cursor_); tab >= 0) {
     if (phase_ == Phase::Edit && textEditor_->isVisible())
       acceptText();
-    activateSelectTab(selectTabItems().at(tab).tab);
+    activateSelectTab(selectTabItems().at(tab).kind);
     return;
   }
   if (phase_ == Phase::Edit && scrollPillRect().contains(cursor_)) {
@@ -4521,55 +4421,16 @@ void CaptureEditor::refreshBackdropCache() {
   }
 }
 
-QString CaptureEditor::selectTabLabel(SelectTab tab) {
-  switch (tab) {
-  case SelectTab::Region:
-    return QStringLiteral("REGION");
-  case SelectTab::Scroll:
-    return QStringLiteral("SCROLLING REGION");
-  case SelectTab::Window:
-    return QStringLiteral("WINDOW");
-  case SelectTab::Fullscreen:
-    return QStringLiteral("FULLSCREEN");
-  }
-  return {};
-}
-
-QVector<CaptureEditor::SelectTabItem> CaptureEditor::selectTabItems() const {
+QVector<CaptureTab> CaptureEditor::selectTabItems() const {
   // In the edit phase the strip stays as the way back: a tab there returns
   // to the select phase in that mode. A file has no screen to go back to.
   if (capture_.source.isNull() || (phase_ == Phase::Edit && !hasLiveScreen()))
     return {};
-  static const SelectTab order[] = {SelectTab::Region, SelectTab::Scroll,
-                                    SelectTab::Window, SelectTab::Fullscreen};
-  QFont tabFont(QStringLiteral("Noto Sans"));
-  tabFont.setBold(true);
-  tabFont.setPixelSize(11);
-  const QFontMetricsF metrics(tabFont);
-  constexpr qreal kPad = 14.0;
-  constexpr qreal kGap = 2.0;
-  constexpr qreal kHeight = 26.0;
-  QVector<SelectTabItem> items;
-  qreal total = 0.0;
-  for (const SelectTab tab : order) {
-    const qreal w = metrics.horizontalAdvance(selectTabLabel(tab)) + 2 * kPad;
-    items.push_back({tab, QRectF(total, 5.0, w, kHeight)});
-    total += w + kGap;
-  }
-  total -= kGap;
-  const qreal left = (width() - total) / 2.0;
-  for (SelectTabItem &item : items)
-    item.rect.translate(left, 0);
-  return items;
+  return captureTabLayout(rect());
 }
 
 int CaptureEditor::selectTabAt(const QPointF &position) const {
-  const QVector<SelectTabItem> items = selectTabItems();
-  for (int index = 0; index < items.size(); ++index) {
-    if (items.at(index).rect.adjusted(-2, -6, 2, 6).contains(position))
-      return index;
-  }
-  return -1;
+  return captureTabAt(selectTabItems(), position);
 }
 
 void CaptureEditor::activateSelectTab(SelectTab tab) {
@@ -4691,48 +4552,12 @@ void CaptureEditor::selectFullscreen() {
 }
 
 void CaptureEditor::paintSelectTabs(QPainter &painter) {
-  // Capture-kind tabs. In the select phase the lit one is the mode the
-  // pointer is in; in the edit phase it is how this capture was taken.
-  const QVector<SelectTabItem> tabs = selectTabItems();
-  if (!tabs.isEmpty()) {
-    // Hangs off the top edge like a tab strip: square at the top (drawn past
-    // the edge so only the bottom corners round), not a floating pill.
-    QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
-                     .adjusted(-5, -30, 5, 5);
-    painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
-    painter.setBrush(QColor(18, 18, 22, 235));
-    painter.drawRoundedRect(bar, 12, 12);
-    QFont tabFont(QStringLiteral("Noto Sans"));
-    tabFont.setBold(true);
-    tabFont.setPixelSize(11);
-    painter.setFont(tabFont);
-    const int hovered = selectTabAt(cursor_);
-    for (int index = 0; index < tabs.size(); ++index) {
-      const SelectTabItem &item = tabs.at(index);
-      const bool active =
-          item.tab == (phase_ == Phase::Edit
-                           ? editedKind_
-                           : windowMode_ ? SelectTab::Window
-                                         : SelectTab::Region);
-      painter.setPen(Qt::NoPen);
-      if (active) {
-        painter.setBrush(item.tab == SelectTab::Window
-                             ? QColor(QStringLiteral("#ffd60a"))
-                         : item.tab == SelectTab::Fullscreen
-                             ? QColor(QStringLiteral("#0a84ff"))
-                             : QColor(QStringLiteral("#30d158")));
-        painter.drawRoundedRect(item.rect, 9, 9);
-        painter.setPen(QColor(18, 18, 22));
-      } else {
-        if (index == hovered) {
-          painter.setBrush(QColor(255, 255, 255, 28));
-          painter.drawRoundedRect(item.rect, 9, 9);
-        }
-        painter.setPen(QColor(255, 255, 255, index == hovered ? 255 : 190));
-      }
-      painter.drawText(item.rect, Qt::AlignCenter, selectTabLabel(item.tab));
-    }
-  }
+  // In the select phase the lit one is the mode the pointer is in; in the
+  // edit phase it is how this capture was taken.
+  const CaptureKind active = phase_ == Phase::Edit ? editedKind_
+                             : windowMode_         ? CaptureKind::Window
+                                                   : CaptureKind::Region;
+  drawCaptureTabs(painter, selectTabItems(), active, cursor_);
 }
 
 void CaptureEditor::paintSelect(QPainter &painter) {

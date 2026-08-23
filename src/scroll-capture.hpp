@@ -137,6 +137,8 @@ public:
   /// instead. The two are the same tool in two moods, so A swaps between them
   /// rather than making anyone close one and launch the other.
   [[nodiscard]] bool switchedToArea() const { return switchedToArea_; }
+  /// Which area-overlay kind was asked for when switchedToArea().
+  [[nodiscard]] CaptureKind areaKind() const { return areaKind_; }
 
 protected:
   void paintEvent(QPaintEvent *event) override;
@@ -246,6 +248,8 @@ private:
   bool statusWarning_ = false;
   QImage result_;
   bool switchedToArea_ = false;
+  CaptureKind areaKind_ = CaptureKind::Region;
+  void switchToArea(CaptureKind kind);
   /// Set when an auto capture stops before the end of the page, the pointer
   /// left the frame, or the injector gave up. What has been captured is still
   /// in the session, so it can be picked up again.
@@ -259,7 +263,6 @@ private:
   bool adoptedRegion_ = false;
   void reserveChromeStrip();
   /// The badge's × , as the shared chrome laid it out this frame.
-  QRectF modeBadgeClose_;
   /// The grip being dragged, and what the region and pointer were when it
   /// started.
   Grip activeGrip_ = Grip::None;
@@ -284,6 +287,9 @@ private:
 /// `initialRegion` (logical monitor coordinates) opens the overlay with that
 /// frame already in place, as if it had just been drawn; null starts with
 /// the drag. The area editor passes the region it was editing.
+/// `areaKind`, when set and switchedToArea, says which mode of the area
+/// overlay was asked for.
 [[nodiscard]] QImage runScrollCapture(const MonitorInfo &monitor,
                                       QString &error, bool *switchedToArea,
-                                      const QRect &initialRegion = {});
+                                      const QRect &initialRegion = {},
+                                      CaptureKind *areaKind = nullptr);

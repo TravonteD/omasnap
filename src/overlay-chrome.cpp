@@ -1,10 +1,108 @@
 /** @fileoverview Shared overlay chrome (see overlay-chrome.hpp). */
 #include "overlay-chrome.hpp"
 
+#include <QFont>
 #include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QPainter>
 
 #include <algorithm>
+
+QString captureTabLabel(CaptureKind kind) {
+  switch (kind) {
+  case CaptureKind::Region:
+    return QStringLiteral("REGION");
+  case CaptureKind::Scroll:
+    return QStringLiteral("SCROLLING REGION");
+  case CaptureKind::Window:
+    return QStringLiteral("WINDOW");
+  case CaptureKind::Fullscreen:
+    return QStringLiteral("FULLSCREEN");
+  }
+  return {};
+}
+
+namespace {
+QFont captureTabFont() {
+  QFont font(QStringLiteral("Noto Sans"));
+  font.setBold(true);
+  font.setPixelSize(11);
+  return font;
+}
+QColor captureTabAccent(CaptureKind kind) {
+  switch (kind) {
+  case CaptureKind::Window:
+    return QColor(QStringLiteral("#ffd60a"));
+  case CaptureKind::Fullscreen:
+    return QColor(QStringLiteral("#0a84ff"));
+  case CaptureKind::Region:
+  case CaptureKind::Scroll:
+    break;
+  }
+  return QColor(QStringLiteral("#30d158"));
+}
+} // namespace
+
+QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
+  static const CaptureKind order[] = {CaptureKind::Region, CaptureKind::Scroll,
+                                      CaptureKind::Window,
+                                      CaptureKind::Fullscreen};
+  const QFontMetricsF metrics(captureTabFont());
+  constexpr qreal kPad = 14.0;
+  constexpr qreal kGap = 2.0;
+  constexpr qreal kHeight = 26.0;
+  QVector<CaptureTab> tabs;
+  qreal total = 0.0;
+  for (const CaptureKind kind : order) {
+    const qreal w = metrics.horizontalAdvance(captureTabLabel(kind)) + 2 * kPad;
+    tabs.push_back({kind, QRectF(total, 5.0, w, kHeight)});
+    total += w + kGap;
+  }
+  total -= kGap;
+  const qreal left = bounds.left() + (bounds.width() - total) / 2.0;
+  for (CaptureTab &tab : tabs)
+    tab.rect.translate(left, 0);
+  return tabs;
+}
+
+int captureTabAt(const QVector<CaptureTab> &tabs, const QPointF &position) {
+  for (int index = 0; index < tabs.size(); ++index) {
+    if (tabs.at(index).rect.adjusted(-2, -6, 2, 6).contains(position))
+      return index;
+  }
+  return -1;
+}
+
+void drawCaptureTabs(QPainter &painter, const QVector<CaptureTab> &tabs,
+                     CaptureKind active, const QPointF &cursor) {
+  if (tabs.isEmpty())
+    return;
+  // Hangs off the top edge like a tab strip: square at the top (drawn past
+  // the edge so only the bottom corners round), not a floating pill.
+  const QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
+                         .adjusted(-5, -30, 5, 5);
+  painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
+  painter.setBrush(QColor(18, 18, 22, 235));
+  painter.drawRoundedRect(bar, 12, 12);
+  painter.setFont(captureTabFont());
+  const int hovered = captureTabAt(tabs, cursor);
+  for (int index = 0; index < tabs.size(); ++index) {
+    const CaptureTab &tab = tabs.at(index);
+    painter.setPen(Qt::NoPen);
+    if (tab.kind == active) {
+      painter.setBrush(captureTabAccent(tab.kind));
+      painter.drawRoundedRect(tab.rect, 9, 9);
+      painter.setPen(QColor(18, 18, 22));
+    } else {
+      if (index == hovered) {
+        painter.setBrush(QColor(255, 255, 255, 28));
+        painter.drawRoundedRect(tab.rect, 9, 9);
+      }
+      painter.setPen(QColor(255, 255, 255, index == hovered ? 255 : 190));
+    }
+    painter.drawText(tab.rect, Qt::AlignCenter, captureTabLabel(tab.kind));
+  }
+}
 
 QRectF drawModeBadge(QPainter &painter, const QRect &bounds,
                      const QString &label, const QColor &accent,
@@ -35,26 +133,26 @@ QRectF drawModeBadge(QPainter &painter, const QRect &bounds,
 
 void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
                       const QPointF &cursor,
-                      const QVector<QPair<QString, QString>> &entries) {
+                      const QVector<QPair<QString, QString>> &entries,
+                      const QVector<QPointF> &keepVisible) {
   if (entries.isEmpty())
     return;
   constexpr int columns = 2;
   const int rows = (entries.size() + columns - 1) / columns;
   QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
   font.setPixelSize(11);
-  painter.setFont(font);
-  // Measured, not guessed: a fixed column width clipped the longer lines, and
-  // a guide that trails off is worse than no guide.
+  // Measured, not guessed: a fixed-width card clipped the longer lines, and a
+  // guide that trails off mid-word is worse than no guide.
   const QFontMetricsF metrics(font);
-  constexpr qreal keyGap = 12;      // between a key and what it does
-  constexpr qreal columnGap = 24;   // between the two columns
-  constexpr qreal padding = 12;     // panel edge to text
+  constexpr qreal keyGap = 12;    // between a key and what it does
+  constexpr qreal columnGap = 24; // between the two columns
+  constexpr qreal padding = 12;   // card edge to text
   qreal keyWidth[columns] = {};
   qreal textWidth[columns] = {};
   for (int index = 0; index < entries.size(); ++index) {
     const int column = std::min(index / rows, columns - 1);
-    keyWidth[column] =
-        std::max(keyWidth[column], metrics.horizontalAdvance(entries.at(index).first));
+    keyWidth[column] = std::max(
+        keyWidth[column], metrics.horizontalAdvance(entries.at(index).first));
     textWidth[column] = std::max(
         textWidth[column], metrics.horizontalAdvance(entries.at(index).second));
   }
@@ -70,9 +168,33 @@ void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
   }
   width = std::min(width, bounds.width() - 28.0);
   const qreal height = rows * 19 + 24;
-  QRectF panel(bounds.width() - width - 14, 14, width, height);
-  if (panel.adjusted(-28, -28, 28, 28).contains(cursor))
-    panel.moveLeft(14);
+  const QRectF right(bounds.width() - width - 14, 14, width, height);
+  const QRectF left(14, 14, width, height);
+  auto hiddenCount = [&](const QRectF &candidate) {
+    int count = 0;
+    for (const QPointF &point : keepVisible) {
+      if (candidate.contains(point))
+        ++count;
+    }
+    return count;
+  };
+  // Flip away from the pointer, but not onto a selected handle. Adding Cut
+  // grew the card far enough that a line-select click near mid-canvas moved
+  // it over the start handle.
+  const bool cursorWantsLeft =
+      right.adjusted(-28, -28, 28, 28).contains(cursor);
+  QRectF panel = cursorWantsLeft ? left : right;
+  const QRectF other = cursorWantsLeft ? right : left;
+  if (hiddenCount(panel) > hiddenCount(other))
+    panel = other;
+  // The flip exists so the guide never sits on what the pointer is doing.
+  // When both positions would still cover the pointer and no handle pins the
+  // card in place, there is nowhere honest to put it: step aside entirely.
+  // On any real monitor the two positions cannot both reach the pointer.
+  if (keepVisible.isEmpty() &&
+      panel.adjusted(-28, -28, 28, 28).contains(cursor) &&
+      other.adjusted(-28, -28, 28, 28).contains(cursor))
+    return;
 
   painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
   painter.setBrush(QColor(13, 15, 20, 224));
@@ -89,10 +211,9 @@ void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
     painter.drawText(QRectF(x, y, keyWidth[column], 18),
                      Qt::AlignLeft | Qt::AlignVCenter, entries.at(index).first);
     painter.setPen(QColor(QStringLiteral("#f5f5f7")));
-    painter.drawText(QRectF(x + keyWidth[column] + keyGap, y, textWidth[column],
-                            18),
-                     Qt::AlignLeft | Qt::AlignVCenter,
-                     entries.at(index).second);
+    painter.drawText(
+        QRectF(x + keyWidth[column] + keyGap, y, textWidth[column], 18),
+        Qt::AlignLeft | Qt::AlignVCenter, entries.at(index).second);
   }
 }
 
