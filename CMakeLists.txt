@@ -48,6 +48,8 @@ add_library(omasnap-core STATIC
   src/cut.hpp
   src/palette-config.cpp
   src/palette-config.hpp
+  src/output-config.cpp
+  src/output-config.hpp
   src/eyedropper.cpp
   src/eyedropper.hpp
   src/surface-capture.cpp

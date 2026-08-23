@@ -30,6 +30,8 @@ struct WindowTarget {
   QRect rect;
   QString stableId;
   QString title;
+  /** Hyprland window class (e.g. `firefox`, `org.gnome.Nautilus`). */
+  QString appClass;
 };
 
 struct CaptureData {
@@ -190,8 +192,26 @@ QImage applyRedactionsScaled(QImage image, const QVector<Annotation> &redactions
 [[nodiscard]] bool ensurePrivateDirectory(const QString &path);
 /** Returns Omasnap's private runtime directory, or empty on failure. */
 [[nodiscard]] QString secureRuntimeDirectory();
+/**
+ * Filename-safe token for a window class: lowercase, `[a-z0-9-]` only,
+ * last segment of a reverse-DNS class, at most 24 characters. Empty when
+ * nothing usable remains.
+ */
+[[nodiscard]] QString appFilenameSlug(const QString &appClass);
+/**
+ * Class of the window covering most of `selection` (preview coordinates),
+ * or empty when no window overlaps it.
+ */
+[[nodiscard]] QString dominantAppClass(const QVector<WindowTarget> &windows,
+                                       const QRectF &selection);
+/**
+ * Moves a finished export into the screenshots directory as
+ * `screenshot-<yyyy-MM-dd_HH-mm-ss>[-<appSlug>].png`. The date leads so the
+ * folder always sorts chronologically.
+ */
 [[nodiscard]] QString moveSnapshotToScreenshots(const QString &sourcePath,
-                                                QString &error);
+                                                QString &error,
+                                                const QString &appSlug = {});
 [[nodiscard]] QString temporarySnapshotPath();
 [[nodiscard]] QString pinnedSnapshotPath(int index);
 void prunePinnedSnapshots();

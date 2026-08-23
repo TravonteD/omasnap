@@ -227,7 +227,40 @@ File URLs are accepted too. A saved capture notification's "Click to edit" actio
 `omasnap` on the finished screenshot, so it can be reopened and re-annotated. Captures copied
 without saving are not retained on disk and therefore have no delayed edit action.
 
-Environment overrides:
+### Configuration (optional)
+
+Omasnap has no settings UI and runs fine with no config at all. If you want to
+change where screenshots land or what they are called, create
+`~/.config/omasnap/omasnap.conf` (INI format); every key is optional:
+
+```ini
+[output]
+# Where saved screenshots go. Default: ~/Pictures/Screenshots
+directory = ~/Pictures/Captures
+# Filename pattern, without extension (.png is appended).
+# Default: screenshot-{date}_{time}-{app}
+filename = screenshot-{date}_{time}-{app}
+
+[colors]
+# Up to eight preset colors for the palette, and the initial custom color.
+palette = #ff375f, #ff9f0a, #ffd60a, #30d158, #0a84ff, #bf5af2, #000000, #ffffff
+custom = #ff375f
+```
+
+Filename tokens:
+
+| Token | Expands to |
+|---|---|
+| `{date}` | `2026-08-23` (yyyy-MM-dd) |
+| `{time}` | `14-05-09` (HH-mm-ss) |
+| `{app}` | Slug of the app under the selection, e.g. `firefox`, `alacritty`, `nautilus` (from the Hyprland window class). Empty for fullscreen captures, file edits, and when nothing is known — the separator before or after it is dropped too, so the default pattern gives `screenshot-2026-08-23_14-05-09.png`. |
+
+The default keeps the date first so the folder always sorts chronologically:
+`screenshot-2026-08-23_14-05-09-firefox.png`. Anything else in the pattern is
+literal text (`screenshot-` is just a string). A name that already exists
+gets `-2`, `-3`, … appended.
+
+Environment overrides (`OMASNAP_SCREENSHOT_DIR` takes precedence over the config):
 
 ```bash
 OMASNAP_SCREENSHOT_DIR="$HOME/Pictures/Captures" omasnap

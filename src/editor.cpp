@@ -3,6 +3,7 @@
 #include "editor.hpp"
 #include "icons.hpp"
 #include "eyedropper.hpp"
+#include "output-config.hpp"
 #include "palette-config.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -621,7 +622,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
       quickOutputMode_(quickOutput) {
   pristineSource_ = capture_.source;
   pristineLogicalSize_ = capture_.previewSize;
-  paletteConfig_ = loadPaletteConfig(defaultPaletteConfigPath());
+  paletteConfig_ = loadPaletteConfig(defaultConfigPath());
   customColor_ = paletteConfig_.custom;
   if (!log.ops.isEmpty()) {
     ops_ = std::move(log.ops);
@@ -2843,7 +2844,9 @@ void CaptureEditor::finish(OutputMode mode) {
     }
   }
   if (mode == OutputMode::Save || mode == OutputMode::Both) {
-    saved = moveSnapshotToScreenshots(exportPath, error);
+    saved = moveSnapshotToScreenshots(
+        exportPath, error,
+        appFilenameSlug(dominantAppClass(capture_.windows, selection_)));
     if (saved.isEmpty()) {
       QFile::remove(exportPath);
       busy_ = false;

@@ -1,5 +1,6 @@
 /** @fileoverview Captures, renders, saves, and shares screenshots. */
 #include "capture.hpp"
+#include "output-config.hpp"
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -167,8 +168,15 @@ QString runtimePath(const QString &name) {
   return runtime.isEmpty() ? QString() : QDir(runtime).filePath(name);
 }
 
-QString screenshotTargetPath(QString &error) {
+QString screenshotTargetPath(QString &error, const QString &appSlug) {
+  // Precedence: OMASNAP_SCREENSHOT_DIR, then [output] directory in the
+  // config, then ~/Pictures/Screenshots. The filename pattern comes from
+  // [output] filename; its default keeps the date first so the folder always
+  // sorts chronologically.
+  const OutputConfig config = loadOutputConfig(defaultConfigPath());
   QString root = qEnvironmentVariable("OMASNAP_SCREENSHOT_DIR");
+  if (root.isEmpty())
+    root = config.directory;
   if (root.isEmpty())
     root =
         QDir(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation))
@@ -179,10 +187,10 @@ QString screenshotTargetPath(QString &error) {
     return {};
   }
 
-  const QString stem = QStringLiteral("screenshot-%1")
-                           .arg(QDateTime::currentDateTime().toString(
-                               QStringLiteral("yyyy-MM-dd_HH-mm-ss")));
-  QString path = QDir(root).filePath(stem + QStringLiteral(".png"));
+  const QString fileName = formatScreenshotFilename(
+      config.filename, QDateTime::currentDateTime(), appSlug);
+  const QString stem = fileName.chopped(4);
+  QString path = QDir(root).filePath(fileName);
   for (int suffix = 2; QFile::exists(path); ++suffix)
     path =
         QDir(root).filePath(QStringLiteral("%1-%2.png").arg(stem).arg(suffix));
@@ -257,12 +265,12 @@ QVector<WindowTarget> parseWindows(const QByteArray &json,
     if (rect.isEmpty())
       continue;
 
+    QString appClass = object.value(QStringLiteral("class")).toString();
     QString title = object.value(QStringLiteral("title")).toString();
     if (title.isEmpty())
-      title = object.value(QStringLiteral("class"))
-                  .toString(QStringLiteral("window"));
+      title = appClass.isEmpty() ? QStringLiteral("window") : appClass;
     result.push_back({rect, object.value(QStringLiteral("stableId")).toString(),
-                      std::move(title)});
+                      std::move(title), std::move(appClass)});
   }
   return result;
 }
@@ -1044,8 +1052,52 @@ bool quickOutput(const QImage &image, QuickOutputMode mode, QString &error) {
   return true;
 }
 
-QString moveSnapshotToScreenshots(const QString &sourcePath, QString &error) {
-  const QString targetPath = screenshotTargetPath(error);
+QString appFilenameSlug(const QString &appClass) {
+  // Reverse-DNS classes (org.gnome.Nautilus) name the app in their last
+  // segment; everything before it is noise in a filename.
+  QString base = appClass;
+  if (const qsizetype dot = base.lastIndexOf(QLatin1Char('.')); dot >= 0)
+    base = base.mid(dot + 1);
+  QString slug;
+  bool pendingDash = false;
+  for (const QChar ch : base.toLower()) {
+    const bool keep = (ch >= QLatin1Char('a') && ch <= QLatin1Char('z')) ||
+                      (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'));
+    if (keep) {
+      if (pendingDash && !slug.isEmpty())
+        slug += QLatin1Char('-');
+      pendingDash = false;
+      slug += ch;
+    } else {
+      pendingDash = true;
+    }
+  }
+  slug.truncate(24);
+  while (slug.endsWith(QLatin1Char('-')))
+    slug.chop(1);
+  return slug;
+}
+
+QString dominantAppClass(const QVector<WindowTarget> &windows,
+                         const QRectF &selection) {
+  QString best;
+  qreal bestArea = 0.0;
+  for (const WindowTarget &window : windows) {
+    if (window.appClass.isEmpty())
+      continue;
+    const QRectF overlap = QRectF(window.rect).intersected(selection);
+    const qreal area = overlap.width() * overlap.height();
+    if (area > bestArea) {
+      bestArea = area;
+      best = window.appClass;
+    }
+  }
+  return best;
+}
+
+QString moveSnapshotToScreenshots(const QString &sourcePath, QString &error,
+                                  const QString &appSlug) {
+  const QString targetPath = screenshotTargetPath(error, appSlug);
   if (targetPath.isEmpty())
     return {};
   if (QFile::rename(sourcePath, targetPath))

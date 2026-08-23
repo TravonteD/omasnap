@@ -1,6 +1,7 @@
 /** @fileoverview Exercises capture editor behavior without a live compositor.
  */
 #include "capture.hpp"
+#include "output-config.hpp"
 #include "cli-path.hpp"
 #include "clipboard-smoke.hpp"
 #include "cut-smoke.hpp"
@@ -18,6 +19,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QScopeGuard>
+#include <QStandardPaths>
 #include <QThread>
 #include <QFile>
 #include <QFileInfo>
@@ -970,6 +972,147 @@ bool runQuickOutputChecks(QString &error) {
       QImage(QDir(directory.path()).filePath(files.constFirst())).isNull() ||
       QFile::exists(temporarySnapshotPath())) {
     error = QStringLiteral("quickOutput did not save exactly one PNG");
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Saved filenames lead with the date (so the folder sorts chronologically)
+ * and end with the slug of the app under the selection when one is known.
+ */
+bool runScreenshotFilenameChecks(QString &error) {
+  const struct {
+    const char *appClass;
+    const char *slug;
+  } slugCases[] = {
+      {"firefox", "firefox"},
+      {"Alacritty", "alacritty"},
+      {"org.gnome.Nautilus", "nautilus"},
+      {"Code - OSS", "code-oss"},
+      {"a.very.long.segment-name-that-keeps-going-on",
+       "segment-name-that-keeps"},
+      {"---", ""},
+      {"", ""},
+  };
+  for (const auto &[appClass, slug] : slugCases) {
+    const QString actual = appFilenameSlug(QString::fromUtf8(appClass));
+    if (actual != QString::fromUtf8(slug)) {
+      error = QStringLiteral("appFilenameSlug(%1) = %2, expected %3")
+                  .arg(QString::fromUtf8(appClass), actual,
+                       QString::fromUtf8(slug));
+      return false;
+    }
+  }
+
+  const QVector<WindowTarget> windows = {
+      {QRect(0, 0, 400, 300), QStringLiteral("w1"), QStringLiteral("Browser"),
+       QStringLiteral("firefox")},
+      {QRect(400, 0, 400, 300), QStringLiteral("w2"), QStringLiteral("Shell"),
+       QStringLiteral("Alacritty")},
+  };
+  if (dominantAppClass(windows, QRectF(250, 50, 200, 100)) !=
+      QStringLiteral("firefox")) {
+    error = QStringLiteral("dominantAppClass did not pick the larger overlap");
+    return false;
+  }
+  if (dominantAppClass(windows, QRectF(350, 50, 200, 100)) !=
+      QStringLiteral("Alacritty")) {
+    error = QStringLiteral("dominantAppClass did not pick the larger overlap");
+    return false;
+  }
+  if (!dominantAppClass(windows, QRectF(0, 400, 100, 100)).isEmpty()) {
+    error = QStringLiteral("dominantAppClass named an app with no overlap");
+    return false;
+  }
+
+  const QDateTime when(QDate(2026, 8, 23), QTime(14, 5, 9));
+  const struct {
+    const char *pattern;
+    const char *app;
+    const char *expected;
+  } patternCases[] = {
+      {"screenshot-{date}_{time}-{app}", "firefox",
+       "screenshot-2026-08-23_14-05-09-firefox.png"},
+      {"screenshot-{date}_{time}-{app}", "",
+       "screenshot-2026-08-23_14-05-09.png"},
+      {"{app}_{date}", "", "2026-08-23.png"},
+      {"shot {date}.png", "", "shot 2026-08-23.png"},
+      {"../{date}", "", "2026-08-23.png"},
+      {"", "", "screenshot-2026-08-23_14-05-09.png"},
+  };
+  for (const auto &[pattern, app, expected] : patternCases) {
+    const QString actual = formatScreenshotFilename(
+        QString::fromUtf8(pattern), when, QString::fromUtf8(app));
+    if (actual != QString::fromUtf8(expected)) {
+      error = QStringLiteral("formatScreenshotFilename(%1, %2) = %3, expected %4")
+                  .arg(QString::fromUtf8(pattern), QString::fromUtf8(app),
+                       actual, QString::fromUtf8(expected));
+      return false;
+    }
+  }
+
+  QTemporaryDir directory;
+  if (!directory.isValid()) {
+    error = QStringLiteral("Could not create filename-check directory");
+    return false;
+  }
+  {
+    const QString configPath =
+        QDir(directory.path()).filePath(QStringLiteral("omasnap.conf"));
+    QFile configFile(configPath);
+    if (!configFile.open(QIODevice::WriteOnly | QIODevice::Text) ||
+        configFile.write("[output]\ndirectory = ~/Captures\n"
+                         "filename = {date} {app}\n") < 0) {
+      error = QStringLiteral("Could not write filename-check config");
+      return false;
+    }
+    configFile.close();
+    const OutputConfig loaded = loadOutputConfig(configPath);
+    if (loaded.directory != QDir::homePath() + QStringLiteral("/Captures") ||
+        loaded.filename != QStringLiteral("{date} {app}")) {
+      error = QStringLiteral("loadOutputConfig read %1 / %2")
+                  .arg(loaded.directory, loaded.filename);
+      return false;
+    }
+    const OutputConfig defaults = loadOutputConfig(
+        QDir(directory.path()).filePath(QStringLiteral("missing.conf")));
+    if (!defaults.directory.isEmpty() ||
+        defaults.filename != QStringLiteral("screenshot-{date}_{time}-{app}")) {
+      error = QStringLiteral("loadOutputConfig changed defaults for a missing file");
+      return false;
+    }
+  }
+  const QByteArray previousDir = qgetenv("OMASNAP_SCREENSHOT_DIR");
+  qputenv("OMASNAP_SCREENSHOT_DIR", directory.path().toUtf8());
+  const auto restoreDir = qScopeGuard([&previousDir] {
+    if (previousDir.isEmpty())
+      qunsetenv("OMASNAP_SCREENSHOT_DIR");
+    else
+      qputenv("OMASNAP_SCREENSHOT_DIR", previousDir);
+  });
+  QImage image(4, 4, QImage::Format_RGB32);
+  image.fill(Qt::red);
+  const QString source = QDir(directory.path()).filePath(
+      QStringLiteral("source.png"));
+  if (!image.save(source)) {
+    error = QStringLiteral("Could not write filename-check source");
+    return false;
+  }
+  // The move reads the real config path; keep the developer's own
+  // [output] filename out of this check.
+  QStandardPaths::setTestModeEnabled(true);
+  const auto restoreTestMode =
+      qScopeGuard([] { QStandardPaths::setTestModeEnabled(false); });
+  QString moveError;
+  const QString saved = moveSnapshotToScreenshots(
+      source, moveError, appFilenameSlug(QStringLiteral("firefox")));
+  const QString name = QFileInfo(saved).fileName();
+  static const QRegularExpression pattern(QStringLiteral(
+      "^screenshot-\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}-firefox\\.png$"));
+  if (saved.isEmpty() || !moveError.isEmpty() || !pattern.match(name).hasMatch()) {
+    error = QStringLiteral("Saved filename did not match <date>-<app>: %1 %2")
+                .arg(name, moveError);
     return false;
   }
   return true;
@@ -4862,6 +5005,10 @@ int main(int argc, char **argv) {
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 73;
+  }
+  if (!runScreenshotFilenameChecks(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 126;
   }
   if (!runStuckModifierSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
