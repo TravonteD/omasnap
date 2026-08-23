@@ -3099,21 +3099,22 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       return;
     }
     if (event->key() == Qt::Key_Space) {
-      // Space steps along the tab strip. Fullscreen is skipped: it acts on
-      // the spot, and a cycle key that captures on the way past would be a
-      // trap rather than a mode.
+      // Space steps along the tab strip. Fullscreen and Scrolling Region are
+      // skipped: both act on the spot (capture, or leave for the scroll
+      // overlay), and a cycle key that fires them on the way past would be a
+      // trap rather than a mode. S still jumps to scroll directly.
       const QVector<SelectTabItem> tabs = selectTabItems();
       int current = -1;
       for (int index = 0; index < tabs.size(); ++index) {
-        if ((tabs.at(index).tab == SelectTab::Window) == windowMode_ &&
-            tabs.at(index).tab != SelectTab::Fullscreen) {
+        if (tabs.at(index).tab ==
+            (windowMode_ ? SelectTab::Window : SelectTab::Region)) {
           current = index;
           break;
         }
       }
       for (int step = 1; step <= tabs.size(); ++step) {
         const SelectTab next = tabs.at((current + step) % tabs.size()).tab;
-        if (next != SelectTab::Fullscreen) {
+        if (next != SelectTab::Fullscreen && next != SelectTab::Scroll) {
           activateSelectTab(next);
           break;
         }
@@ -4469,6 +4470,8 @@ QString CaptureEditor::selectTabLabel(SelectTab tab) {
   switch (tab) {
   case SelectTab::Region:
     return QStringLiteral("REGION");
+  case SelectTab::Scroll:
+    return QStringLiteral("SCROLLING REGION");
   case SelectTab::Window:
     return QStringLiteral("WINDOW");
   case SelectTab::Fullscreen:
@@ -4480,8 +4483,8 @@ QString CaptureEditor::selectTabLabel(SelectTab tab) {
 QVector<CaptureEditor::SelectTabItem> CaptureEditor::selectTabItems() const {
   if (phase_ != Phase::Select || capture_.source.isNull())
     return {};
-  static const SelectTab order[] = {SelectTab::Region, SelectTab::Window,
-                                    SelectTab::Fullscreen};
+  static const SelectTab order[] = {SelectTab::Region, SelectTab::Scroll,
+                                    SelectTab::Window, SelectTab::Fullscreen};
   QFont tabFont(QStringLiteral("Noto Sans"));
   tabFont.setBold(true);
   tabFont.setPixelSize(11);
@@ -4516,6 +4519,12 @@ void CaptureEditor::activateSelectTab(SelectTab tab) {
   switch (tab) {
   case SelectTab::Region:
     setWindowMode(false);
+    break;
+  case SelectTab::Scroll:
+    // Hand over to the scroll overlay before any pixels are taken; main()
+    // runs it on this monitor and its A tab comes straight back here.
+    switchedToScroll_ = true;
+    close();
     break;
   case SelectTab::Window:
     setWindowMode(true);
@@ -4612,8 +4621,8 @@ void CaptureEditor::paintSelect(QPainter &painter) {
     const int hovered = selectTabAt(cursor_);
     for (int index = 0; index < tabs.size(); ++index) {
       const SelectTabItem &item = tabs.at(index);
-      const bool active = (item.tab == SelectTab::Window) == windowMode_ &&
-                          item.tab != SelectTab::Fullscreen;
+      const bool active =
+          item.tab == (windowMode_ ? SelectTab::Window : SelectTab::Region);
       painter.setPen(Qt::NoPen);
       if (active) {
         painter.setBrush(item.tab == SelectTab::Window

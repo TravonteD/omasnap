@@ -291,8 +291,8 @@ Install the corresponding Tesseract language data before adding a language to
 ### Capture selection
 
 Tabs across the top of the overlay switch the capture kind: **Region**,
-**Window**, **Fullscreen**. The keys below do the same without reaching for the
-pointer.
+**Scrolling Region**, **Window**, **Fullscreen**. The keys below do the same
+without reaching for the pointer.
 
 | Input | Action |
 |---|---|

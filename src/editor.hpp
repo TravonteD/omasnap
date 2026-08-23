@@ -314,7 +314,7 @@ private:
   void chooseWindow(int index);
   /// Capture-kind tabs across the top of the select overlay. Region and
   /// Window are modes (one is always lit); Fullscreen acts at once.
-  enum class SelectTab { Region, Window, Fullscreen };
+  enum class SelectTab { Region, Scroll, Window, Fullscreen };
   struct SelectTabItem {
     SelectTab tab;
     QRectF rect;
