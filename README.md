@@ -285,7 +285,7 @@ pointer.
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Toggle region/window selection (the Region / Window tabs) |
+| `Space` | Step through the capture-kind tabs (Region, Window) |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `SUPER + Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |

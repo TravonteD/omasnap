@@ -3078,7 +3078,25 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       return;
     }
     if (event->key() == Qt::Key_Space) {
-      setWindowMode(!windowMode_);
+      // Space steps along the tab strip. Fullscreen is skipped: it acts on
+      // the spot, and a cycle key that captures on the way past would be a
+      // trap rather than a mode.
+      const QVector<SelectTabItem> tabs = selectTabItems();
+      int current = -1;
+      for (int index = 0; index < tabs.size(); ++index) {
+        if ((tabs.at(index).tab == SelectTab::Window) == windowMode_ &&
+            tabs.at(index).tab != SelectTab::Fullscreen) {
+          current = index;
+          break;
+        }
+      }
+      for (int step = 1; step <= tabs.size(); ++step) {
+        const SelectTab next = tabs.at((current + step) % tabs.size()).tab;
+        if (next != SelectTab::Fullscreen) {
+          activateSelectTab(next);
+          break;
+        }
+      }
       return;
     }
     QWidget::keyPressEvent(event);
