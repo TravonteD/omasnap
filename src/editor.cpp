@@ -4454,7 +4454,7 @@ QVector<CaptureEditor::SelectTabItem> CaptureEditor::selectTabItems() const {
   qreal total = 0.0;
   for (const SelectTab tab : order) {
     const qreal w = metrics.horizontalAdvance(selectTabLabel(tab)) + 2 * kPad;
-    items.push_back({tab, QRectF(total, 15.0, w, kHeight)});
+    items.push_back({tab, QRectF(total, 5.0, w, kHeight)});
     total += w + kGap;
   }
   total -= kGap;
@@ -4559,8 +4559,10 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   // never lights because it acts the moment it is picked.
   const QVector<SelectTabItem> tabs = selectTabItems();
   if (!tabs.isEmpty()) {
+    // Hangs off the top edge like a tab strip: square at the top (drawn past
+    // the edge so only the bottom corners round), not a floating pill.
     QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
-                     .adjusted(-4, -4, 4, 4);
+                     .adjusted(-5, -30, 5, 5);
     painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
     painter.setBrush(QColor(18, 18, 22, 235));
     painter.drawRoundedRect(bar, 12, 12);
