@@ -49,6 +49,8 @@ add_library(omasnap-core STATIC
   src/cut.hpp
   src/palette-config.cpp
   src/palette-config.hpp
+  src/recent-snaps.cpp
+  src/recent-snaps.hpp
   src/output-config.cpp
   src/output-config.hpp
   src/overlay-chrome.cpp
@@ -108,6 +110,8 @@ qt_add_executable(omasnap-smoke
   tests/palette-config-smoke.cpp
   tests/palette-config-smoke.hpp
   src/cli-path.cpp
+  src/recent-snaps.cpp
+  src/recent-snaps.hpp
   src/cli-path.hpp
   src/capture.cpp
   src/capture.hpp

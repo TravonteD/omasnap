@@ -3,6 +3,7 @@
 #include "editor.hpp"
 #include "instance-lock.hpp"
 #include "pin.hpp"
+#include "recent-snaps.hpp"
 
 #include <LayerShellQt/Window>
 
@@ -21,6 +22,7 @@
 #include <QWindow>
 
 #include <csignal>
+#include <optional>
 #include <cerrno>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -311,11 +313,7 @@ int main(int argc, char **argv) {
         return 1;
       }
     }
-    capture.source = image;
-    capture.previewSize = image.size();
-    capture.monitor.scale = 1.0;
-    capture.monitor.pixelSize = image.size();
-    capture.monitor.geometry = QRect(QPoint(0, 0), image.size());
+    describeFileCapture(capture, image, restoredLog);
     captureMode = CaptureEditor::CaptureMode::File;
     qInfo().noquote() << QStringLiteral("Opened %1 for annotation (%2x%3)")
                              .arg(inputName)

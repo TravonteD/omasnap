@@ -4,6 +4,7 @@
 #include "cut.hpp"
 #include "overlay-chrome.hpp"
 #include "palette-config.hpp"
+#include "recent-snaps.hpp"
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -12,6 +13,8 @@
 #include <QLineF>
 #include <QTimer>
 #include <QWidget>
+
+#include <optional>
 
 class QKeyEvent;
 class QMouseEvent;
@@ -177,6 +180,8 @@ private:
     OutputMode mode = OutputMode::Copy;
     QString saved;
     QString error;
+    /// Small flattened preview for the recents shelf.
+    QImage thumbnail;
   };
 
   struct EditState {
@@ -237,6 +242,16 @@ public:
   /// Whether the scroll panel is up. Test accessor.
   [[nodiscard]] bool scrollPanelActiveForTest() const {
     return scrollPanel_ != nullptr;
+  }
+  /// Blocks until the shelf has been listed; false when it is empty.
+  bool waitForRecents();
+  /// Whether the shelf is fanned out. Test accessor.
+  [[nodiscard]] bool recentsOpenForTest() const { return recentsOpen_; }
+  /// Widget rect of shelf card `index` at its settled position (fanned when
+  /// open, stacked when not), or null. Test accessor.
+  [[nodiscard]] QRectF recentCardRectForTest(int index) const;
+  [[nodiscard]] int recentCountForTest() const {
+    return static_cast<int>(recents_.size());
   }
   /// Current status line. Test accessor.
   [[nodiscard]] QString statusForTest() const { return status_; }
@@ -368,6 +383,21 @@ private:
   /// the drawn region; null when not offered.
   [[nodiscard]] QRectF scrollPillRect() const;
   void paintSelectTabs(QPainter &painter);
+  /// The shelf of earlier captures along the right edge of the select
+  /// overlay: a stack of small cards that fans out under the pointer, each
+  /// reopening its capture in place of taking a new one.
+  struct RecentCard {
+    QRectF rect;
+    qreal rotation = 0.0;
+  };
+  void loadRecents();
+  [[nodiscard]] QVector<RecentCard> recentCards(qreal fan) const;
+  [[nodiscard]] QRectF recentsHotZone() const;
+  [[nodiscard]] int recentAt(const QPointF &position) const;
+  void setRecentsOpen(bool open);
+  void trackRecentsHover();
+  void paintRecents(QPainter &painter);
+  void reopenRecent(int index);
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
   void enterEdit(QString status);
@@ -443,6 +473,17 @@ private:
   CaptureMode captureMode_ = CaptureMode::Region;
   /// Which tab produced the capture being edited; lit in the edit phase.
   SelectTab editedKind_ = SelectTab::Region;
+  std::optional<RecentSnap> editingRecent_;
+  QVector<RecentSnap> recents_;
+  QFutureWatcher<QVector<RecentSnap>> recentsWatcher_;
+  bool recentsLoading_ = false;
+  bool recentsOpen_ = false;
+  int hoveredRecent_ = -1;
+  /// 0 = stacked, 1 = fanned; eased between the two by recentsAnimTimer_.
+  qreal recentsFan_ = 0.0;
+  qreal recentsFanFrom_ = 0.0;
+  QElapsedTimer recentsAnimClock_;
+  QTimer recentsAnimTimer_;
   QRectF selection_;
   QPointF dragStart_;
   QRectF originalSelection_;

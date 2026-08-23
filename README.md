@@ -35,6 +35,9 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - Verified PNG clipboard output through `wl-copy`/`wl-paste`, plus timestamped files
   under `~/Pictures/Screenshots` by default.
 - Open an image already on the clipboard directly in the annotation editor.
+- A recents shelf: the select overlay stacks small cards of the last five captures
+  along the right edge; hover to fan them out, click one to reopen it in the editor
+  with its layers still editable instead of taking a new screenshot.
 - Correct native-pixel export on fractional or integer-scaled monitors.
 
 ## Platform scope
@@ -236,8 +239,16 @@ The clipboard must offer readable image data. Text-only clipboard contents retur
 error instead of opening an empty editor.
 
 File URLs are accepted too. A saved capture notification's "Click to edit" action launches
-`omasnap` on the finished screenshot, so it can be reopened and re-annotated. Captures copied
-without saving are not retained on disk and therefore have no delayed edit action.
+`omasnap` on the finished screenshot, so it can be reopened and re-annotated.
+
+### Recent captures
+
+Every capture finished from the editor (copied, saved, or both) keeps its working
+document, source plus operation log, on a shelf of the five most recent under
+`~/.local/state/omasnap/recent/` (`OMASNAP_RECENT_DIR` overrides). The select
+overlay shows them as a small stack of cards on the right; hovering fans them out
+and clicking one reopens that capture in the editor, undo history intact, in place
+of a new screenshot. Finishing a reopened capture replaces its shelf entry.
 
 ### Configuration (optional)
 
@@ -308,6 +319,7 @@ without reaching for the pointer.
 | `SUPER + Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |
 | `Ctrl+A` | Select the full focused monitor (the Fullscreen tab) |
+| Hover the right-edge stack | Fan out the five most recent captures; click one to reopen it |
 | `Esc`, `Esc` | Dismiss |
 
 ### Annotation editor

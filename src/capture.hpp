@@ -102,6 +102,10 @@ struct OperationLog {
   int index = 0;
   quint64 nextId = 1;
   int nextMarker = 1;
+  /// Logical size the source was presented at when the log was written. Op
+  /// coordinates live in that space, so a source captured on a scaled
+  /// monitor reopens at the same scale. Invalid when unknown.
+  QSize previewSize;
 
   bool operator==(const OperationLog &) const = default;
 };
@@ -176,6 +180,11 @@ private:
 [[nodiscard]] bool loadOperationLog(const QString &path, OperationLog &log,
                                     QString &error);
 [[nodiscard]] QString temporaryExportPath();
+/** Presents a loaded image as the thing being edited. A log written by the
+ *  editor carries the logical size its ops were laid out in; a source taken
+ *  on a scaled monitor then opens at that scale rather than at 1:1. */
+void describeFileCapture(CaptureData &capture, QImage image,
+                         const OperationLog &log);
 /** Returns an upright image for captured Wayland buffer contents. */
 [[nodiscard]] QImage normalizeWaylandCapture(const QImage &image,
                                              std::uint32_t transform);

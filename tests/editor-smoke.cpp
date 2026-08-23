@@ -6,6 +6,7 @@
 #include "clipboard-smoke.hpp"
 #include "cut-smoke.hpp"
 #include "editor.hpp"
+#include "recent-snaps.hpp"
 #include "instance-lock-smoke.hpp"
 #include "palette-config-smoke.hpp"
 #include "pin-layout-smoke.hpp"
@@ -2451,6 +2452,219 @@ bool runOpLogSmoke(QApplication &application, QString &error) {
     return false;
   }
   reopened.close();
+  return true;
+}
+
+/**
+ * The recents shelf: finishing a capture moves its working document onto the
+ * shelf, the next select overlay shows it as a small card on the right that
+ * fans out under the pointer, and clicking the card asks main() to reopen it
+ * with its layers still editable. Reopening and finishing again replaces the
+ * entry rather than adding a twin, and the shelf never grows past its limit.
+ */
+bool runRecentsShelfSmoke(QApplication &application, QString &error) {
+  QTemporaryDir shelf;
+  QTemporaryDir screenshots;
+  if (!shelf.isValid() || !screenshots.isValid()) {
+    error = QStringLiteral("Could not create recents shelf directories");
+    return false;
+  }
+  const QByteArray previousShelf = qgetenv("OMASNAP_RECENT_DIR");
+  const QByteArray previousDir = qgetenv("OMASNAP_SCREENSHOT_DIR");
+  qputenv("OMASNAP_RECENT_DIR", shelf.path().toUtf8());
+  qputenv("OMASNAP_SCREENSHOT_DIR", screenshots.path().toUtf8());
+  const auto restoreEnv = qScopeGuard([&] {
+    qputenv("OMASNAP_RECENT_DIR", previousShelf);
+    if (previousDir.isEmpty())
+      qunsetenv("OMASNAP_SCREENSHOT_DIR");
+    else
+      qputenv("OMASNAP_SCREENSHOT_DIR", previousDir);
+  });
+
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#204060")));
+  {
+    QPainter painter(&capture.source);
+    painter.fillRect(QRect(100, 100, 200, 120), QColor(QStringLiteral("#ffaa00")));
+  }
+  capture.previewSize = capture.source.size();
+
+  // An empty shelf draws nothing and claims no pointer.
+  {
+    CaptureEditor editor(capture, CaptureEditor::CaptureMode::Region);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+    if (editor.waitForRecents() || editor.recentCountForTest() != 0 ||
+        !editor.recentCardRectForTest(0).isNull()) {
+      error = QStringLiteral("Empty shelf reported cards");
+      return false;
+    }
+    editor.close();
+  }
+
+  // Take a capture with a layer on it and save: the working document should
+  // land on the shelf with a thumbnail and a log that knows its preview size.
+  QImage firstOutput;
+  {
+    CaptureEditor editor(capture, CaptureEditor::CaptureMode::Fullscreen);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+    QTest::keyClick(&editor, Qt::Key_A);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 200));
+    QTest::mouseMove(&editor, QPoint(400, 320), 20);
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(400, 320));
+    application.processEvents();
+    if (editor.annotationCountForTest() != 1) {
+      error = QStringLiteral("Recents smoke could not draw an arrow");
+      return false;
+    }
+    firstOutput = editor.renderCurrentOutput();
+    QTest::keyClick(&editor, Qt::Key_S, Qt::ControlModifier);
+    editor.waitForExport();
+  }
+  QVector<RecentSnap> shelved = listRecentSnaps(true);
+  if (shelved.size() != 1 || shelved.constFirst().thumbnail.isNull() ||
+      shelved.constFirst().logPath.isEmpty() ||
+      !QFile::exists(shelved.constFirst().sourcePath)) {
+    error = QStringLiteral("Saving did not shelve the working document (%1)")
+                .arg(shelved.size());
+    return false;
+  }
+  if (shelved.constFirst().thumbnail.width() > kRecentThumbEdge ||
+      shelved.constFirst().thumbnail.height() > kRecentThumbEdge) {
+    error = QStringLiteral("Shelf thumbnail was not shrunk");
+    return false;
+  }
+  {
+    OperationLog log;
+    if (!loadOperationLog(shelved.constFirst().logPath, log, error))
+      return false;
+    if (log.previewSize != QSize(800, 600)) {
+      error = QStringLiteral("Shelved log did not record its preview size");
+      return false;
+    }
+  }
+  const QString firstSource = shelved.constFirst().sourcePath;
+
+  // The next select overlay shows the card; hovering fans it out; a click
+  // asks to reopen it without capturing.
+  {
+    CaptureEditor editor(capture, CaptureEditor::CaptureMode::Region);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+    if (!editor.waitForRecents() || editor.recentCountForTest() != 1) {
+      error = QStringLiteral("Select overlay did not list the shelved capture");
+      return false;
+    }
+    if (editor.recentsOpenForTest()) {
+      error = QStringLiteral("Shelf opened before the pointer reached it");
+      return false;
+    }
+    const QRectF stacked = editor.recentCardRectForTest(0);
+    if (stacked.isNull() || stacked.right() > 800 || stacked.left() < 600) {
+      error = QStringLiteral("Shelf card is not along the right edge (%1,%2)")
+                  .arg(stacked.left())
+                  .arg(stacked.right());
+      return false;
+    }
+    QTest::mouseMove(&editor, QPoint(100, 300), 20);
+    application.processEvents();
+    QTest::mouseMove(&editor, stacked.center().toPoint(), 20);
+    application.processEvents();
+    if (!editor.recentsOpenForTest()) {
+      error = QStringLiteral("Hovering the stack did not fan the shelf out");
+      return false;
+    }
+    const QRectF fanned = editor.recentCardRectForTest(0);
+    // Dragging from inside the open shelf must not start a region.
+    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(qRound(fanned.left()) - 8,
+                             qRound(fanned.bottom()) + 4));
+    application.processEvents();
+    if (!editor.selectingForTest() || !editor.currentSelection().isEmpty()) {
+      error = QStringLiteral("A click in the shelf margin started a selection");
+      return false;
+    }
+    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                      fanned.center().toPoint());
+    application.processEvents();
+    // Reopened in place: same surface, same picture, layer still undoable.
+    if (editor.selectingForTest() || !editor.isVisible() ||
+        editor.annotationCountForTest() != 1 ||
+        editor.renderCurrentOutput().convertToFormat(QImage::Format_ARGB32) !=
+            firstOutput.convertToFormat(QImage::Format_ARGB32)) {
+      error = QStringLiteral("Clicking the card did not reopen it in place");
+      return false;
+    }
+    QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+    application.processEvents();
+    if (editor.annotationCountForTest() != 0) {
+      error = QStringLiteral("Reopened capture lost its undo history");
+      return false;
+    }
+    // Finishing again replaces the shelf entry instead of shelving a twin.
+    QTest::keyClick(&editor, Qt::Key_S, Qt::ControlModifier);
+    editor.waitForExport();
+
+    // Far from the shelf, it folds back.
+    CaptureEditor again(capture, CaptureEditor::CaptureMode::Region);
+    again.resize(800, 600);
+    again.show();
+    application.processEvents();
+    again.waitForRecents();
+    QTest::mouseMove(&again, again.recentCardRectForTest(0).center().toPoint(),
+                     20);
+    application.processEvents();
+    QTest::mouseMove(&again, QPoint(100, 300), 20);
+    application.processEvents();
+    if (again.recentsOpenForTest()) {
+      error = QStringLiteral("Shelf stayed open after the pointer left");
+      return false;
+    }
+    again.close();
+  }
+  shelved = listRecentSnaps(false);
+  if (shelved.size() != 1 || shelved.constFirst().sourcePath == firstSource ||
+      QFile::exists(firstSource)) {
+    error = QStringLiteral("Finishing a reopened capture did not replace its "
+                           "shelf entry (%1 entries)")
+                .arg(shelved.size());
+    return false;
+  }
+
+  // The shelf holds the newest five and no more.
+  for (int index = 0; index < kRecentSnapLimit + 2; ++index) {
+    const QString source = temporarySnapshotPath();
+    QString saveError;
+    if (!saveTemporarySnapshot(capture.source, source, saveError, 100) ||
+        !recordRecentSnap(source, {}, capture.source, saveError)) {
+      error = QStringLiteral("Could not fill the shelf: %1").arg(saveError);
+      return false;
+    }
+    QThread::msleep(2); // distinct millisecond stamps
+  }
+  const QVector<RecentSnap> full = listRecentSnaps(false);
+  if (full.size() != kRecentSnapLimit) {
+    error = QStringLiteral("Shelf kept %1 entries, wanted %2")
+                .arg(full.size())
+                .arg(kRecentSnapLimit);
+    return false;
+  }
+  for (int index = 1; index < full.size(); ++index) {
+    if (full.at(index - 1).stampMs < full.at(index).stampMs) {
+      error = QStringLiteral("Shelf is not newest first");
+      return false;
+    }
+  }
   return true;
 }
 
@@ -5219,6 +5433,13 @@ int main(int argc, char **argv) {
   if (!loadCaptureFonts())
     return 17;
 
+  // Every finish() in this suite shelves a working document; keep those out
+  // of the developer's own recents.
+  QTemporaryDir smokeShelf;
+  if (!smokeShelf.isValid())
+    return 18;
+  qputenv("OMASNAP_RECENT_DIR", smokeShelf.path().toUtf8());
+
   // Live output capture against a real compositor (the smoke's own Wayland
   // connection; Qt's platform does not matter): open a session on the named
   // output and grab several frames through the same buffer, timing them,
@@ -5590,6 +5811,10 @@ int main(int argc, char **argv) {
   if (!runOpLogSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 98;
+  }
+  if (!runRecentsShelfSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 120;
   }
   if (!runShellQuoteCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;

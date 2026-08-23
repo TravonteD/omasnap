@@ -1530,6 +1530,10 @@ bool saveOperationLog(const QString &path, const OperationLog &log,
   root.insert(QStringLiteral("index"), log.index);
   root.insert(QStringLiteral("nextId"), QString::number(log.nextId));
   root.insert(QStringLiteral("nextMarker"), log.nextMarker);
+  if (log.previewSize.isValid()) {
+    root.insert(QStringLiteral("previewWidth"), log.previewSize.width());
+    root.insert(QStringLiteral("previewHeight"), log.previewSize.height());
+  }
   root.insert(QStringLiteral("ops"), ops);
 
   QSaveFile file(path);
@@ -1572,6 +1576,11 @@ bool loadOperationLog(const QString &path, OperationLog &log, QString &error) {
   loaded.index = root.value(QStringLiteral("index")).toInt();
   loaded.nextId = root.value(QStringLiteral("nextId")).toString().toULongLong();
   loaded.nextMarker = root.value(QStringLiteral("nextMarker")).toInt(1);
+  loaded.previewSize =
+      QSize(root.value(QStringLiteral("previewWidth")).toInt(),
+            root.value(QStringLiteral("previewHeight")).toInt());
+  if (loaded.previewSize.isEmpty())
+    loaded.previewSize = QSize();
   if (loaded.nextId == 0)
     loaded.nextId = 1;
   if (loaded.nextMarker < 1)
@@ -1653,4 +1662,24 @@ void sendCaptureNotification(const QString &message, const QString &imagePath) {
   arguments << QStringLiteral("-t") << QStringLiteral("4500");
   QProcess::startDetached(QStringLiteral("omarchy-notification-send"),
                           arguments);
+}
+
+/// Presents a loaded image as the thing being edited. A log written by the
+/// editor carries the logical size its ops were laid out in; a source taken
+/// on a scaled monitor then opens at that scale rather than at 1:1.
+void describeFileCapture(CaptureData &capture, QImage image,
+                         const OperationLog &log) {
+  capture = CaptureData();
+  capture.previewSize = image.size();
+  capture.monitor.scale = 1.0;
+  if (log.previewSize.isValid() && !log.previewSize.isEmpty() &&
+      log.previewSize.width() <= image.width() &&
+      log.previewSize.height() <= image.height()) {
+    capture.previewSize = log.previewSize;
+    capture.monitor.scale =
+        image.width() / static_cast<qreal>(log.previewSize.width());
+  }
+  capture.monitor.pixelSize = image.size();
+  capture.monitor.geometry = QRect(QPoint(0, 0), capture.previewSize);
+  capture.source = std::move(image);
 }
