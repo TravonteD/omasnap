@@ -24,6 +24,8 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <QElapsedTimer>
+
 #include <cmath>
 
 namespace {
@@ -33,6 +35,23 @@ constexpr int kCaptureIntervalMs = 100;
 /// runs on a worker thread, so waiting is fine; a static screen simply yields
 /// no frame this round.
 constexpr int kGrabTimeoutMs = 400;
+/// Automatic mode reads the screen until it has stopped changing rather than
+/// after a fixed delay: browsers animate a wheel tick over anything from one
+/// frame to several hundred milliseconds, and a frame taken mid-animation
+/// lands wherever the easing curve happened to be. After a tick the page is
+/// given kMotionWaitMs to start moving at all (no change by then is a real
+/// stationary frame: the end of the page, or a wheel that went elsewhere).
+/// Once it moves, a frame is settled when the next grab times out (no damage
+/// for kSettleGrabMs) or repeats the previous one exactly; kMaxSettleMs caps
+/// that for content that never holds still (video, spinners).
+constexpr int kMotionWaitMs = 700;
+constexpr int kSettleGrabMs = 120;
+constexpr int kMaxSettleMs = 2000;
+/// Fraction of the region an automatic step should travel. Overlap is what
+/// the stitcher aligns on; half the region leaves it plenty at any scroll
+/// speed, and the notch count is fitted to it after the first verified step.
+constexpr double kTargetStepFraction = 0.45;
+constexpr int kMaxNotchesPerTick = 12;
 constexpr int kMinRegion = 32; // logical px
 /// How far outside the region its grips and its draggable border reach. The
 /// region itself has to stay untouched: it is what the capture crops.
@@ -93,6 +112,69 @@ struct ScrollCaptureOverlay::Worker {
   QImage firstCrop;
   QImage lastCrop;
   QString debugDir;
+  /// Notches per normal automatic tick, fitted to the region once the first
+  /// verified step says how far one notch moves this page.
+  int notchesPerTick = stitch::kNotchesPerTick;
+  bool notchesFitted = false;
+
+  /// Crop of the region from a full output frame, in the stitcher's format.
+  [[nodiscard]] QImage crop(const QImage &frame) const {
+    return frame.copy(regionPhysical).convertToFormat(QImage::Format_RGBA8888);
+  }
+
+  /// Reads frames until the region has settled after a scroll tick (see the
+  /// kMotionWaitMs block). `before` is the region as it was before the tick;
+  /// null on the first cycle. Returns false only when the session is dead or
+  /// nothing could be grabbed at all; `error` describes it.
+  [[nodiscard]] bool acquireSettledFrame(const QImage &before, QImage &settled,
+                                         QString &error) {
+    QElapsedTimer clock;
+    clock.start();
+    bool moved = before.isNull();
+    QImage last;
+    int failures = 0;
+    while (true) {
+      QImage frame;
+      const bool ok = output.grab(frame, error, moved ? kSettleGrabMs
+                                                       : kSettleGrabMs / 2);
+      if (!ok) {
+        if (output.sessionStopped())
+          return false;
+        if (moved && !last.isNull()) {
+          settled = last; // no damage since the last frame: it is the one
+          return true;
+        }
+        if (!moved && clock.elapsed() >= kMotionWaitMs) {
+          settled = before; // nothing moved: genuinely stationary
+          return true;
+        }
+        if (++failures >= 40) // ~5 s of nothing but failures
+          return false;
+        continue;
+      }
+      failures = 0;
+      const QImage current = crop(frame);
+      if (!moved) {
+        if (current != before) {
+          moved = true;
+        } else if (clock.elapsed() >= kMotionWaitMs) {
+          settled = current;
+          return true;
+        } else {
+          continue;
+        }
+      }
+      if (!last.isNull() && current == last) {
+        settled = current; // two identical frames in a row: settled
+        return true;
+      }
+      last = current;
+      if (clock.elapsed() >= kMaxSettleMs) {
+        settled = current; // never holds still; take what is there
+        return true;
+      }
+    }
+  }
 };
 
 ScrollCaptureOverlay::ScrollCaptureOverlay(MonitorInfo monitor, QWidget *parent)
@@ -309,10 +391,12 @@ void ScrollCaptureOverlay::startCapture(Mode mode, stitch::Axis axis) {
   injectorStop_ = std::make_shared<std::atomic<bool>>(false);
   handshake_ = std::make_shared<stitch::CaptureHandshake>();
   const qreal scale = monitor_.scale > 0 ? monitor_.scale : 1.0;
-  // Park low inside the selection so wheel events hit the page, clear of
-  // the region's bottom edge.
-  const int parkX = qRound((region_.x() + std::max(region_.width() - 30, 1)) * scale);
-  const int parkY = qRound((region_.y() + std::max(region_.height() - 60, 1)) * scale);
+  // Park at the centre of the region: the point most likely to be over the
+  // content being captured. A corner is where a region drawn a little
+  // generously spills onto the neighbouring window, and the wheel then
+  // scrolls that instead.
+  const int parkX = qRound((region_.x() + region_.width() / 2.0) * scale);
+  const int parkY = qRound((region_.y() + region_.height() / 2.0) * scale);
   setStatus(QStringLiteral("Auto-scrolling… · move the pointer out of the "
                            "frame to stop · Done stitches it"));
   // Spawn after this frame's commit so the input-region hole and the released
@@ -473,8 +557,8 @@ void ScrollCaptureOverlay::autoCaptureLoop() {
       QThread::msleep(20);
       continue;
     }
-    QImage frame;
-    if (!w.output.grab(frame, error, kGrabTimeoutMs)) {
+    QImage cropped;
+    if (!w.acquireSettledFrame(w.lastCrop, cropped, error)) {
       // Never acknowledge on a failed grab: the worker holds this cycle and
       // the same stable screen is retried.
       if (w.output.sessionStopped()) {
@@ -491,8 +575,6 @@ void ScrollCaptureOverlay::autoCaptureLoop() {
     }
     w.consecutiveFailures = 0;
     ++w.grabbed;
-    const QImage cropped = frame.copy(w.regionPhysical)
-                               .convertToFormat(QImage::Format_RGBA8888);
     if (!w.debugDir.isEmpty())
       cropped.save(w.debugDir + QStringLiteral("/grab-%1-crop.png")
                                    .arg(w.grabbed, 3, 10, QChar('0')),
@@ -502,21 +584,45 @@ void ScrollCaptureOverlay::autoCaptureLoop() {
       w.lastCrop = cropped;
     if (out.event == Event::Seeded)
       w.firstCrop = cropped;
-    if (!w.debugDir.isEmpty())
-      qInfo().noquote() << QStringLiteral("auto grab %1 cycle %2: event=%3 ack=%4 kept=%5")
-                               .arg(w.grabbed).arg(cycle)
-                               .arg(static_cast<int>(out.event))
-                               .arg(static_cast<int>(out.ack))
-                               .arg(w.autoSession.keptFrames());
+    qInfo().noquote() << QStringLiteral("auto grab %1 cycle %2: event=%3 ack=%4 "
+                                        "delta=%5 kept=%6 notches=%7")
+                             .arg(w.grabbed)
+                             .arg(cycle)
+                             .arg(static_cast<int>(out.event))
+                             .arg(static_cast<int>(out.ack))
+                             .arg(out.estimate.motion.delta)
+                             .arg(w.autoSession.keptFrames())
+                             .arg(w.notchesPerTick);
     if (out.event == Event::Blank) {
       // Not consumed: retry the same cycle once the overlay's paint settles.
       QThread::msleep(20);
       continue;
     }
     w.lastCycle = cycle;
+    // Fit the step to the page after the first verified forward step: one
+    // notch moves a different distance in every application (and with every
+    // scroll_factor), and the stitcher needs the frames to overlap by about
+    // half whatever that turns out to be.
+    if (!w.notchesFitted && out.event == Event::Appended &&
+        out.estimate.motion.delta > 0) {
+      const double perNotch =
+          static_cast<double>(out.estimate.motion.delta) / w.notchesPerTick;
+      const int extent = axis_ == stitch::Axis::Vertical
+                             ? w.regionPhysical.height()
+                             : w.regionPhysical.width();
+      const int fitted = static_cast<int>(
+          std::lround(extent * kTargetStepFraction / std::max(perNotch, 1.0)));
+      w.notchesPerTick = std::clamp(fitted, 1, kMaxNotchesPerTick);
+      w.notchesFitted = true;
+      qInfo().noquote() << QStringLiteral("auto: %1 px per notch, region %2 px, "
+                                          "%3 notches per tick from here")
+                               .arg(perNotch, 0, 'f', 1)
+                               .arg(extent)
+                               .arg(w.notchesPerTick);
+    }
     switch (out.ack) {
     case Ack::Normal:
-      handshake_->acknowledge(cycle);
+      handshake_->acknowledgeWithNotches(cycle, w.notchesPerTick);
       break;
     case Ack::Probe:
       handshake_->acknowledgeWithNotches(cycle, 1);
