@@ -33,6 +33,8 @@
 #include <memory>
 #include <optional>
 
+class QWindow;
+
 namespace LayerShellQt {
 class Window;
 }
@@ -70,79 +72,35 @@ class Window;
   return QRect(x + index * (pillWidth + gap), y, pillWidth, pillHeight);
 }
 
-/// One line describing the region last captured on a monitor, for the runtime
-/// file that lets the next capture start from it. Session scratch, not
-/// configuration: it lives beside the snapshots and the instance lock in
-/// $XDG_RUNTIME_DIR, so it is gone at reboot, a region only means anything for
-/// the screen it was drawn on.
-[[nodiscard]] inline QString formatStoredScrollRegion(const QString &monitor,
-                                                      const QSize &surface,
-                                                      const QRect &region) {
-  return QStringLiteral("%1 %2 %3 %4 %5 %6 %7")
-      .arg(monitor.isEmpty() ? QStringLiteral("?") : monitor)
-      .arg(surface.width())
-      .arg(surface.height())
-      .arg(region.x())
-      .arg(region.y())
-      .arg(region.width())
-      .arg(region.height());
-}
-
-/// The region in `line`, or a null rect when it was written for a different
-/// monitor or a different screen size, does not fit, or is not what we wrote.
-/// Anything unreadable is simply not offered; there is nothing to migrate.
-[[nodiscard]] inline QRect parseStoredScrollRegion(const QString &line,
-                                                   const QString &monitor,
-                                                   const QSize &surface) {
-  const QStringList fields = line.trimmed().split(QLatin1Char(' '));
-  if (fields.size() != 7)
-    return {};
-  if (fields.at(0) != (monitor.isEmpty() ? QStringLiteral("?") : monitor))
-    return {};
-  bool ok = true;
-  int values[6] = {};
-  for (int index = 0; index < 6; ++index) {
-    bool field = false;
-    values[index] = fields.at(index + 1).toInt(&field);
-    ok = ok && field;
-  }
-  if (!ok || QSize(values[0], values[1]) != surface)
-    return {};
-  const QRect region(values[2], values[3], values[4], values[5]);
-  if (region.width() < 32 || region.height() < 32 ||
-      !QRect(QPoint(), surface).contains(region))
-    return {};
-  return region;
-}
-
-/// Overlay widget for one scroll capture on a single monitor: drag a region,
-/// choose a mode (manual or automatic, vertical or horizontal), scroll, or let
-/// the injection worker scroll, and stitch. Show it on an exclusive fullscreen
-/// layer surface; when it closes, result() holds the stitched image (null if
-/// cancelled).
-class ScrollCaptureOverlay final : public QWidget {
+/// The scroll-capture state of the capture overlay, hosted inside the editor
+/// as a child covering the surface. It takes over once a region has been
+/// drawn (the editor's own region selection is the selection): choose manual
+/// or automatic, scroll, or let the injection worker scroll, and stitch. It
+/// manages the layer's input hole and keyboard grab while it is up, and
+/// hands back with stitched(), dismissed() or tabRequested().
+class ScrollCapturePanel final : public QWidget {
+  Q_OBJECT
 public:
-  explicit ScrollCaptureOverlay(MonitorInfo monitor, QWidget *parent = nullptr);
-  /// Start with `region` selected (clamped to the surface and the chrome
-  /// strip) instead of waiting for a drag. Call before show().
-  void adoptRegion(const QRect &region);
-  ~ScrollCaptureOverlay() override;
+  /// `layer` is the surface the editor lives on; the panel toggles its
+  /// keyboard interactivity and input mask while it is up and restores both
+  /// on destruction. Null (headless tests) leaves both alone.
+  ScrollCapturePanel(MonitorInfo monitor, LayerShellQt::Window *layer,
+                     QWidget *parent);
+  ~ScrollCapturePanel() override;
+  /// Take over with `region` (logical surface pixels, clamped to the
+  /// surface and the chrome strip) already drawn. Call once, after show().
+  void begin(const QRect &region);
 
-  /// The layer surface backing this widget; used to toggle keyboard
-  /// interactivity as the pointer crosses between chrome and the page.
-  void setLayerWindow(LayerShellQt::Window *layer);
-  /// The stitched capture, or a null image if the user cancelled.
-  [[nodiscard]] QImage result() const { return result_; }
-  /// Whether the overlay was left by asking for an ordinary area capture
-  /// instead. The two are the same tool in two moods, so A swaps between them
-  /// rather than making anyone close one and launch the other.
-  [[nodiscard]] bool switchedToArea() const { return switchedToArea_; }
-  /// Which area-overlay kind was asked for when switchedToArea().
-  [[nodiscard]] CaptureKind areaKind() const { return areaKind_; }
+signals:
+  /// The capture is done: `image` is the stitched result.
+  void stitched(const QImage &image);
+  /// Cancelled, or a fresh region was asked for: back to selecting.
+  void dismissed();
+  /// A tab on the strip other than Scrolling Region was clicked.
+  void tabRequested(CaptureKind kind);
 
 protected:
   void paintEvent(QPaintEvent *event) override;
-  void showEvent(QShowEvent *event) override;
   void wheelEvent(QWheelEvent *event) override;
   void enterEvent(QEnterEvent *event) override;
   void leaveEvent(QEvent *event) override;
@@ -152,7 +110,7 @@ protected:
   void keyPressEvent(QKeyEvent *event) override;
 
 private:
-  enum class Phase { Selecting, Selected, Capturing, Finishing, Finished };
+  enum class Phase { Selected, Capturing, Finishing, Finished };
   enum class Mode { Manual, Auto };
   /// What a press on the region's chrome does: the eight edges and corners
   /// resize it, the puck in the middle moves it. The middle is otherwise the
@@ -194,7 +152,6 @@ private:
   /// Rects the overlay must keep taking clicks in the current phase.
   [[nodiscard]] QVector<QRect> chromeRects() const;
   void setStatus(const QString &status, bool warning = false);
-  [[nodiscard]] QRect regionLogical() const;
   [[nodiscard]] QRect regionPhysical() const;
   [[nodiscard]] QRect doneButtonRect() const;
   /// Leaves a capture in progress and returns to the mode row, keeping the
@@ -209,7 +166,6 @@ private:
   /// Applies a grip drag: `point` is where the pointer is now, measured
   /// against where the region and the pointer started.
   void applyGrip(const QPoint &point);
-  void rememberRegion() const;
   /// What the key guide in the corner says, for the phase in hand.
   [[nodiscard]] QVector<QPair<QString, QString>> legendEntries() const;
   /// Resumes an auto capture that stopped short, keeping what it has.
@@ -235,41 +191,28 @@ private:
 
   MonitorInfo monitor_;
   LayerShellQt::Window *layer_ = nullptr;
-  Phase phase_ = Phase::Selecting;
-  /// Last pointer position, for the crosshairs drawn while choosing a region.
+  Phase phase_ = Phase::Selected;
+  /// Last pointer position, for the tab strip's hover hint.
   QPoint cursor_;
-  QPoint dragStart_;
-  QPoint dragEnd_;
-  bool dragging_ = false;
   QRect region_; // logical widget pixels, normalized
   Mode mode_ = Mode::Manual;
   stitch::Axis axis_ = stitch::Axis::Vertical;
   QString status_;
   bool statusWarning_ = false;
-  QImage result_;
-  bool switchedToArea_ = false;
-  CaptureKind areaKind_ = CaptureKind::Region;
-  void switchToArea(CaptureKind kind);
   /// Set when an auto capture stops before the end of the page, the pointer
   /// left the frame, or the injector gave up. What has been captured is still
   /// in the session, so it can be picked up again.
   bool autoStalled_ = false;
-  /// The region this monitor was last captured with, if the runtime file had
-  /// one that still fits. Not shown until asked for: most captures are of
-  /// somewhere new, so the overlay opens empty and R brings this back.
-  QRect storedRegion_;
-  /// A region adopted before show(); enterSelected() runs on the first show
-  /// so the layer, input region and grab state are set up by then.
-  bool adoptedRegion_ = false;
   void reserveChromeStrip();
-  /// The badge's × , as the shared chrome laid it out this frame.
+  /// The top-level window's handle, for the input mask.
+  [[nodiscard]] QWindow *surfaceWindow() const;
   /// The grip being dragged, and what the region and pointer were when it
   /// started.
   Grip activeGrip_ = Grip::None;
   QRect gripStartRegion_;
   QPoint gripStartPoint_;
-  /// Whether the layer currently holds the exclusive keyboard grab. It does
-  /// while a region is being drawn, and not once one exists.
+  /// Whether the layer currently holds the exclusive keyboard grab: only
+  /// while the pointer is on our chrome, never over the live page.
   bool keyboardGrabbed_ = true;
 
   std::unique_ptr<Worker> worker_;
@@ -280,16 +223,3 @@ private:
   std::shared_ptr<std::atomic<bool>> injectorStop_;
   std::shared_ptr<stitch::CaptureHandshake> handshake_;
 };
-
-/// Runs a manual scroll capture on `monitor` (its own exclusive layer surface
-/// and event loop). Returns the stitched image, or a null image if cancelled
-/// or on error (with `error` set).
-/// `initialRegion` (logical monitor coordinates) opens the overlay with that
-/// frame already in place, as if it had just been drawn; null starts with
-/// the drag. The area editor passes the region it was editing.
-/// `areaKind`, when set and switchedToArea, says which mode of the area
-/// overlay was asked for.
-[[nodiscard]] QImage runScrollCapture(const MonitorInfo &monitor,
-                                      QString &error, bool *switchedToArea,
-                                      const QRect &initialRegion = {},
-                                      CaptureKind *areaKind = nullptr);

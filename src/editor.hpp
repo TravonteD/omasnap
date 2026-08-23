@@ -21,6 +21,10 @@ class QWheelEvent;
 class QPainter;
 
 class InlineTextEdit;
+class ScrollCapturePanel;
+namespace LayerShellQt {
+class Window;
+}
 /// Corner radius for the dashed selection box around `annotation`, drawn
 /// `inset` px outside its bounds. A rounded rectangle or text pill inside a
 /// square box reads as a mistake, and while the radius is being set the box
@@ -35,7 +39,7 @@ class InlineTextEdit;
 class CaptureEditor final : public QWidget {
   Q_OBJECT
 public:
-  enum class CaptureMode { Region, Window, Fullscreen, File };
+  enum class CaptureMode { Region, Scroll, Window, Fullscreen, File };
 
   explicit CaptureEditor(CaptureData capture,
                          CaptureMode mode = CaptureMode::Region,
@@ -225,13 +229,15 @@ public:
   [[nodiscard]] int selectedCountForTest() const {
     return static_cast<int>(selectedAnnotations_.size());
   }
-  /// Whether the overlay was left by asking for a scroll capture instead:
-  /// the two kinds of capture swap with one key rather than making anyone
-  /// close this and launch the other.
-  [[nodiscard]] bool switchedToScroll() const { return switchedToScroll_; }
-  /// Region (logical monitor coordinates) to hand to the scroll overlay when
-  /// switchedToScroll() came from an already-drawn region; null otherwise.
-  [[nodiscard]] QRect scrollRegion() const { return scrollRegion_; }
+  /// The layer surface this editor lives on. The scroll state toggles its
+  /// keyboard interactivity and input mask while the page underneath is live.
+  void setLayerWindow(LayerShellQt::Window *layer) { layer_ = layer; }
+  /// Whether the select phase is in scroll mode. Test accessor.
+  [[nodiscard]] bool scrollModeForTest() const { return scrollMode_; }
+  /// Whether the scroll panel is up. Test accessor.
+  [[nodiscard]] bool scrollPanelActiveForTest() const {
+    return scrollPanel_ != nullptr;
+  }
   /// Current status line. Test accessor.
   [[nodiscard]] QString statusForTest() const { return status_; }
   /// Whether the selection chrome is currently stepped back for an adjustment.
@@ -336,11 +342,19 @@ private:
   [[nodiscard]] int selectTabAt(const QPointF &position) const;
   void activateSelectTab(SelectTab tab);
   void setWindowMode(bool enabled);
+  void setScrollMode(bool enabled);
   void selectFullscreen();
   /// Back from the editor to the select phase: the op log is dropped and the
   /// frozen screen is offered again for a new region or window.
   void returnToSelect(bool windowMode);
-  void switchToScroll(const QRect &region);
+  /// Scroll capture takes over the surface with `region` drawn.
+  void startScrollCapture(const QRect &region);
+  /// Tears the scroll panel down; the surface is whole again.
+  void endScrollCapture();
+  /// A stitched scroll capture becomes the image being edited.
+  void adoptStitched(const QImage &image);
+  /// Leaves the select phase with a drawn region: edit it, or scroll it.
+  void commitRegion(const QRectF &region, const QString &editStatus);
   /// Whether there is a live screen behind this capture to re-select from
   /// (not a file, clipboard image or stitched result).
   [[nodiscard]] bool hasLiveScreen() const;
@@ -411,8 +425,15 @@ private:
   /// What to hand back to once a color has been sampled: taking a color is
   /// not a change of tool.
   Tool toolBeforeEyedropper_ = Tool::Select;
-  bool switchedToScroll_ = false;
-  QRect scrollRegion_;
+  bool scrollMode_ = false;
+  /// The image being edited is a stitched scroll result, not the screen.
+  bool stitchedCapture_ = false;
+  /// The monitor as captured, kept apart from capture_.monitor (which a
+  /// stitched result replaces) so the screen can be captured again.
+  MonitorInfo liveMonitor_;
+  [[nodiscard]] CaptureKind selectKind() const;
+  LayerShellQt::Window *layer_ = nullptr;
+  ScrollCapturePanel *scrollPanel_ = nullptr;
   CaptureMode captureMode_ = CaptureMode::Region;
   /// Which tab produced the capture being edited; lit in the edit phase.
   SelectTab editedKind_ = SelectTab::Region;

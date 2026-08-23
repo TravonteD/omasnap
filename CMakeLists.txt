@@ -85,13 +85,14 @@ target_link_libraries(omasnap-core PUBLIC
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
+  LayerShellQt::Interface
   PkgConfig::WaylandClient
 )
 
 qt_add_executable(omasnap src/main.cpp src/pin.cpp src/pin.hpp)
 target_compile_options(omasnap PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(omasnap PRIVATE OMASNAP_VERSION="${PROJECT_VERSION}")
-target_link_libraries(omasnap PRIVATE omasnap-core LayerShellQt::Interface)
+target_link_libraries(omasnap PRIVATE omasnap-core)
 
 if(BUILD_TESTING)
 qt_add_executable(omasnap-smoke

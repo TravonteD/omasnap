@@ -309,7 +309,8 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("one")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space);
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
+    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -330,7 +331,8 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("rotated")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space);
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
+    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
     QTest::mouseMove(&editor, QPoint(320, 180), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -387,7 +389,8 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("hidpi")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space);
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
+    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -441,7 +444,8 @@ bool runMeasurementReadoutCheck(QString &error) {
   if (!expect(QStringLiteral("300, 240"), QStringLiteral("Idle pointer")))
     return false;
 
-  QTest::keyClick(&editor, Qt::Key_Space);
+  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
+  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
   QTest::mouseMove(&editor, QPoint(200, 150), 20);
   QApplication::processEvents();
   if (!expect(QStringLiteral("600 × 440"), QStringLiteral("Hovered window")))
@@ -4599,8 +4603,8 @@ bool runViewportZoomSmoke(QApplication &application, QString &error) {
   editor.show();
   application.processEvents();
   // Whole-monitor selection so the tall image fills the edit surface.
-  QTest::keyClick(&editor, Qt::Key_Space);
-  QTest::keyClick(&editor, Qt::Key_Space); // window mode toggles off if on
+
+
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 80));
   QTest::mouseMove(&editor, QPoint(760, 560), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(760, 560));
@@ -4720,8 +4724,6 @@ bool runViewportZoomSmoke(QApplication &application, QString &error) {
     wideEditor.resize(800, 600);
     wideEditor.show();
     application.processEvents();
-    QTest::keyClick(&wideEditor, Qt::Key_Space);
-    QTest::keyClick(&wideEditor, Qt::Key_Space);
     QTest::mousePress(&wideEditor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 80));
     QTest::mouseMove(&wideEditor, QPoint(760, 560), 20);
     QTest::mouseRelease(&wideEditor, Qt::LeftButton, Qt::NoModifier, QPoint(760, 560));
@@ -4820,6 +4822,53 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
     return false;
   }
   editor.close();
+
+  // Scrolling Region is a mode of the same surface: drawing a region in it
+  // brings the scroll panel up in place; its tabs leave it; dismissing it
+  // returns to selecting in scroll mode.
+  {
+    CaptureEditor scrollEditor(capture, CaptureEditor::CaptureMode::Scroll);
+    scrollEditor.resize(800, 600);
+    scrollEditor.show();
+    application.processEvents();
+    if (!scrollEditor.scrollModeForTest() || !scrollEditor.selectingForTest()) {
+      error = QStringLiteral("--scroll did not open selecting in scroll mode");
+      return false;
+    }
+    QTest::mousePress(&scrollEditor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(100, 100));
+    QTest::mouseMove(&scrollEditor, QPoint(500, 400), 20);
+    QTest::mouseRelease(&scrollEditor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(500, 400));
+    application.processEvents();
+    if (!scrollEditor.scrollPanelActiveForTest() ||
+        !scrollEditor.selectingForTest()) {
+      error = QStringLiteral("A region in scroll mode did not bring the scroll "
+                             "panel up");
+      return false;
+    }
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
+    application.processEvents();
+    if (scrollEditor.scrollPanelActiveForTest() ||
+        !scrollEditor.scrollModeForTest() || !scrollEditor.isVisible()) {
+      error = QStringLiteral("Esc on the scroll panel did not return to "
+                             "selecting a scrolling region");
+      return false;
+    }
+    // Space walks Region -> Scroll -> Window -> Region.
+    QTest::keyClick(&scrollEditor, Qt::Key_Space);
+    if (!scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Space from scroll mode did not step to window");
+      return false;
+    }
+    QTest::keyClick(&scrollEditor, Qt::Key_Space);
+    QTest::keyClick(&scrollEditor, Qt::Key_Space);
+    if (!scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Space did not cycle back round to scroll mode");
+      return false;
+    }
+    scrollEditor.close();
+  }
 
   // A file has no screen to go back to: no tabs in its editor.
   CaptureEditor fileEditor(capture, CaptureEditor::CaptureMode::File);
@@ -5572,7 +5621,8 @@ int main(int argc, char **argv) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  QTest::keyClick(&editor, Qt::Key_Space);
+  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
+  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
   QTest::mouseMove(&editor, QPoint(200, 160), 20);
   application.processEvents();
   const QImage hoverUi = editor.grab().toImage();
@@ -5586,7 +5636,7 @@ int main(int argc, char **argv) {
       keyboardWindowUi.pixelColor(200, 160) ==
           capture.source.pixelColor(200, 160))
     return 8;
-  QTest::keyClick(&editor, Qt::Key_Space);
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Region
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,

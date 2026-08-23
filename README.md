@@ -291,16 +291,19 @@ Install the corresponding Tesseract language data before adding a language to
 ### Capture selection
 
 Tabs across the top of the overlay switch the capture kind: **Region**,
-**Scrolling Region**, **Window**, **Fullscreen**. They stay up in the editor
-too: a tab there drops the edit and goes back to capturing in that mode, and a
-small **Scroll capture** button under the image opens the scroll overlay with
-the drawn region already in place. The keys below do the same without reaching
-for the pointer.
+**Scrolling Region**, **Window**, **Fullscreen**. All four are modes of the
+same overlay. Scrolling Region selects exactly like Region; once the region is
+drawn, the page inside it goes live and the scroll controls appear in place.
+The tabs stay up in the editor too: a tab there drops the edit and goes back to
+capturing in that mode, and a small **Scroll capture** button under the image
+turns the drawn region into a scrolling capture. The keys below do the same
+without reaching for the pointer.
 
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Step through the capture-kind tabs (Region, Window) |
+| `Space` | Step through the capture-kind tabs (Region, Scrolling Region, Window) |
+| `S` | Toggle scrolling-region mode |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `SUPER + Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |

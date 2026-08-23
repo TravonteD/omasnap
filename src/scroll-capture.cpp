@@ -100,7 +100,7 @@ const char *eventName(stitch::ManualCapture::Event event) {
 }
 } // namespace
 
-struct ScrollCaptureOverlay::Worker {
+struct ScrollCapturePanel::Worker {
   explicit Worker(stitch::Axis axis) : session(axis), autoSession(axis) {}
   OutputCapture output;
   stitch::ManualCapture session;    // manual mode
@@ -177,64 +177,33 @@ struct ScrollCaptureOverlay::Worker {
   }
 };
 
-ScrollCaptureOverlay::ScrollCaptureOverlay(MonitorInfo monitor, QWidget *parent)
-    : QWidget(parent), monitor_(std::move(monitor)) {
+ScrollCapturePanel::ScrollCapturePanel(MonitorInfo monitor,
+                                       LayerShellQt::Window *layer,
+                                       QWidget *parent)
+    : QWidget(parent), monitor_(std::move(monitor)), layer_(layer) {
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
-  setCursor(Qt::CrossCursor); // choosing a region, like the region capture
   setAttribute(Qt::WA_TranslucentBackground);
-  status_ = QStringLiteral(
-      "Drag to select a scroll region · A switches to area capture");
+  if (parent)
+    setGeometry(parent->rect());
 }
 
-namespace {
-/// Beside the snapshots and the instance lock, in the private runtime dir.
-QString storedRegionPath() {
-  const QString runtime = secureRuntimeDirectory();
-  if (runtime.isEmpty())
-    return {};
-  return QDir(runtime).filePath(QStringLiteral("scroll-region"));
-}
-} // namespace
-
-ScrollCaptureOverlay::~ScrollCaptureOverlay() { stopWorker(); }
-
-void ScrollCaptureOverlay::setLayerWindow(LayerShellQt::Window *layer) {
-  layer_ = layer;
+ScrollCapturePanel::~ScrollCapturePanel() {
+  stopWorker();
+  // Hand the surface back whole: no hole, keyboard exclusive again.
+  if (QWindow *window = surfaceWindow())
+    window->setMask(QRegion());
+  if (layer_)
+    layer_->setKeyboardInteractivity(
+        LayerShellQt::Window::KeyboardInteractivityExclusive);
 }
 
-void ScrollCaptureOverlay::showEvent(QShowEvent *event) {
-  QWidget::showEvent(event);
-  if (adoptedRegion_ && phase_ == Phase::Selecting) {
-    // Handed a region by the area editor: open with it selected, the layer
-    // and input region now being real.
-    adoptedRegion_ = false;
-    enterSelected();
-    return;
-  }
-  // Read the last region now that the surface has its real size; one written
-  // for a different screen or monitor is ignored. The overlay still opens empty
-  // and inviting a drag, since most captures are of somewhere new, and R
-  // brings this one back to adjust with the grips.
-  const QString path = storedRegionPath();
-  if (path.isEmpty())
-    return;
-  QFile file(path);
-  if (!file.open(QIODevice::ReadOnly))
-    return;
-  storedRegion_ = parseStoredScrollRegion(
-      QString::fromUtf8(file.readLine(256)), monitor_.name, size());
-  if (!storedRegion_.isEmpty()) {
-    setStatus(QStringLiteral("Drag to select a scroll region · R brings back "
-                             "the last one"));
-  }
+QWindow *ScrollCapturePanel::surfaceWindow() const {
+  const QWidget *top = window();
+  return top ? top->windowHandle() : nullptr;
 }
 
-QRect ScrollCaptureOverlay::regionLogical() const {
-  return QRect(dragStart_, dragEnd_).normalized();
-}
-
-QRect ScrollCaptureOverlay::regionPhysical() const {
+QRect ScrollCapturePanel::regionPhysical() const {
   // Round the edges, not the extents: rounding x and width independently can
   // shift the crop against the visible hole by a pixel at fractional scales,
   // stitching a stationary overlay-edge column into every band.
@@ -246,13 +215,13 @@ QRect ScrollCaptureOverlay::regionPhysical() const {
   return QRect(left, top, std::max(1, right - left), std::max(1, bottom - top));
 }
 
-void ScrollCaptureOverlay::setStatus(const QString &status, bool warning) {
+void ScrollCapturePanel::setStatus(const QString &status, bool warning) {
   status_ = status;
   statusWarning_ = warning;
   update();
 }
 
-void ScrollCaptureOverlay::postStalled() {
+void ScrollCapturePanel::postStalled() {
   // Called from the worker thread when an auto capture stops before the end.
   QMetaObject::invokeMethod(
       this,
@@ -266,7 +235,7 @@ void ScrollCaptureOverlay::postStalled() {
       Qt::QueuedConnection);
 }
 
-void ScrollCaptureOverlay::postStatus(const QString &status, bool warning) {
+void ScrollCapturePanel::postStatus(const QString &status, bool warning) {
   // Called from the worker thread; hop to the UI thread. A queued update can
   // arrive after Done stopped the worker, and it must not overwrite the
   // finishing/final status.
@@ -278,18 +247,7 @@ void ScrollCaptureOverlay::postStatus(const QString &status, bool warning) {
       });
 }
 
-void ScrollCaptureOverlay::rememberRegion() const {
-  const QString path = storedRegionPath();
-  if (path.isEmpty() || region_.isEmpty())
-    return;
-  QFile file(path);
-  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    return; // remembering is a convenience; failing to is not an error
-  file.write(
-      formatStoredScrollRegion(monitor_.name, size(), region_).toUtf8());
-}
-
-QVector<QRect> ScrollCaptureOverlay::chromeRects() const {
+QVector<QRect> ScrollCapturePanel::chromeRects() const {
   QVector<QRect> rects;
   for (const CaptureTab &tab : captureTabLayout(rect()))
     rects.push_back(tab.rect.toAlignedRect());
@@ -309,33 +267,29 @@ QVector<QRect> ScrollCaptureOverlay::chromeRects() const {
   return rects;
 }
 
-void ScrollCaptureOverlay::applyInputRegion() {
-  if (!windowHandle())
+void ScrollCapturePanel::applyInputRegion() {
+  QWindow *window = surfaceWindow();
+  if (!window)
     return;
   // The region is exposed from the moment it is chosen, so the page can be
   // scrolled into place without losing it.
   if (phase_ != Phase::Capturing && phase_ != Phase::Selected) {
-    windowHandle()->setMask(QRegion()); // whole surface takes input
+    window->setMask(QRegion()); // whole surface takes input
     return;
   }
-  windowHandle()->setMask(
-      scrollOverlayInputRegion(rect(), region_, chromeRects()));
+  window->setMask(scrollOverlayInputRegion(rect(), region_, chromeRects()));
 }
 
-void ScrollCaptureOverlay::updateKeyboardZone(const QPoint &point) {
+void ScrollCapturePanel::updateKeyboardZone(const QPoint &point) {
   // The grab pins pointer focus to this layer, which is what stops the wheel
   // reaching the page, so it is held only while the pointer is on our own
   // chrome, and only once a real event has said so. Assuming the pointer was on
   // the chrome is what broke scrolling before: a Wayland client cannot ask
   // where the pointer is, so the answer here always comes from an event.
-  if (phase_ == Phase::Selecting) {
-    setKeyboardGrab(true);
-    return;
-  }
   setKeyboardGrab(!region_.contains(point));
 }
 
-void ScrollCaptureOverlay::setKeyboardGrab(bool grab) {
+void ScrollCapturePanel::setKeyboardGrab(bool grab) {
   // Hyprland pins pointer focus to a layer that holds an exclusive keyboard
   // grab, even over an input-region hole, so while the grab is held the wheel
   // never reaches the page. Once a region exists the page has to be
@@ -355,7 +309,7 @@ void ScrollCaptureOverlay::setKeyboardGrab(bool grab) {
 
 // ---- capture -----------------------------------------------------------------
 
-void ScrollCaptureOverlay::startCapture(Mode mode, stitch::Axis axis) {
+void ScrollCapturePanel::startCapture(Mode mode, stitch::Axis axis) {
   if (region_.width() < kMinRegion || region_.height() < kMinRegion)
     return;
   mode_ = mode;
@@ -432,7 +386,7 @@ void ScrollCaptureOverlay::startCapture(Mode mode, stitch::Axis axis) {
       });
 }
 
-void ScrollCaptureOverlay::stopWorker() {
+void ScrollCapturePanel::stopWorker() {
   stopRequested_ = true;
   if (injectorStop_)
     injectorStop_->store(true, std::memory_order_release);
@@ -440,7 +394,7 @@ void ScrollCaptureOverlay::stopWorker() {
     workerFuture_.waitForFinished();
 }
 
-void ScrollCaptureOverlay::captureLoop() {
+void ScrollCapturePanel::captureLoop() {
   using Event = stitch::ManualCapture::Event;
   Worker &w = *worker_;
   QString error;
@@ -547,7 +501,7 @@ void ScrollCaptureOverlay::captureLoop() {
   }
 }
 
-void ScrollCaptureOverlay::autoCaptureLoop() {
+void ScrollCapturePanel::autoCaptureLoop() {
   using Event = stitch::AutoCapture::Event;
   using Ack = stitch::AutoCapture::Ack;
   Worker &w = *worker_;
@@ -716,7 +670,7 @@ void ScrollCaptureOverlay::autoCaptureLoop() {
   }
 }
 
-void ScrollCaptureOverlay::finishCapture() {
+void ScrollCapturePanel::finishCapture() {
   if (phase_ != Phase::Capturing)
     return;
   phase_ = Phase::Finishing;
@@ -730,9 +684,9 @@ void ScrollCaptureOverlay::finishCapture() {
     cancel();
     return;
   }
-  QImage stitched = mode_ == Mode::Auto ? w.autoSession.finish(error)
+  QImage assembled = mode_ == Mode::Auto ? w.autoSession.finish(error)
                                         : w.session.finish(error);
-  if (stitched.isNull()) {
+  if (assembled.isNull()) {
     phase_ = Phase::Capturing;
     setStatus(QStringLiteral("Stitch failed: %1").arg(error), true);
     // The worker's state is intact; restart the (manual) loop so the user can
@@ -749,9 +703,9 @@ void ScrollCaptureOverlay::finishCapture() {
         << QStringLiteral("scroll: capture may contain %1 repeated or missing "
                           "section(s)")
                .arg(w.autoSession.unverifiedSeams());
-  result_ = stitched.convertToFormat(QImage::Format_ARGB32);
+  const QImage result = assembled.convertToFormat(QImage::Format_ARGB32);
   if (!w.debugDir.isEmpty()) {
-    result_.save(w.debugDir + QStringLiteral("/scroll-stitched.png"), "PNG");
+    result.save(w.debugDir + QStringLiteral("/scroll-stitched.png"), "PNG");
     if (!w.firstCrop.isNull())
       w.firstCrop.save(w.debugDir + QStringLiteral("/scroll-first-frame.png"), "PNG");
     if (!w.lastCrop.isNull())
@@ -760,12 +714,12 @@ void ScrollCaptureOverlay::finishCapture() {
   const int kept = mode_ == Mode::Auto ? w.autoSession.keptFrames()
                                        : w.session.keptFrames();
   qInfo().noquote() << QStringLiteral("scroll: stitched %1 frames into %2x%3")
-                           .arg(kept).arg(result_.width()).arg(result_.height());
+                           .arg(kept).arg(result.width()).arg(result.height());
   phase_ = Phase::Finished;
-  close();
+  emit stitched(result);
 }
 
-void ScrollCaptureOverlay::switchMode(Mode mode) {
+void ScrollCapturePanel::switchMode(Mode mode) {
   // Wrong mode is the same mistake as the wrong direction: keep the region,
   // throw the frames away, start again the other way.
   if (phase_ == Phase::Selected) {
@@ -784,7 +738,7 @@ void ScrollCaptureOverlay::switchMode(Mode mode) {
   startCapture(mode, axis);
 }
 
-void ScrollCaptureOverlay::continueCapture() {
+void ScrollCapturePanel::continueCapture() {
   // Picks the same capture back up: the session keeps every band it already
   // has, so this carries on from the last one rather than starting a second
   // capture of the same page. Moving the pointer out is how it stopped, so the
@@ -822,7 +776,7 @@ void ScrollCaptureOverlay::continueCapture() {
   workerFuture_ = QtConcurrent::run([this] { autoCaptureLoop(); });
 }
 
-void ScrollCaptureOverlay::returnToModeChoice() {
+void ScrollCapturePanel::returnToModeChoice() {
   // Throw the frames away and go back to the mode row with the region intact.
   if (phase_ != Phase::Capturing)
     return;
@@ -839,48 +793,38 @@ void ScrollCaptureOverlay::returnToModeChoice() {
   update();
 }
 
-void ScrollCaptureOverlay::cancel() {
+void ScrollCapturePanel::cancel() {
   stopWorker();
-  result_ = {};
   phase_ = Phase::Finished;
-  close();
+  emit dismissed();
 }
 
 // ---- chrome ------------------------------------------------------------------
 
-int ScrollCaptureOverlay::capturePillCount() const {
+int ScrollCapturePanel::capturePillCount() const {
   return autoStalled_ ? 4 : 3;
 }
 
-QRect ScrollCaptureOverlay::doneButtonRect() const {
+QRect ScrollCapturePanel::doneButtonRect() const {
   return scrollOverlayPillRect(rect(), region_, capturePillCount(), 0, 132, 40,
                                12);
 }
 
-QRect ScrollCaptureOverlay::continueButtonRect() const {
+QRect ScrollCapturePanel::continueButtonRect() const {
   if (!autoStalled_)
     return {};
   return scrollOverlayPillRect(rect(), region_, capturePillCount(), 1, 132, 40,
                                12);
 }
-QVector<QPair<QString, QString>> ScrollCaptureOverlay::legendEntries() const {
-  if (phase_ == Phase::Selecting) {
-    QVector<QPair<QString, QString>> entries{
-        {QStringLiteral("Drag"), QStringLiteral("Scroll region")},
-        {QStringLiteral("A"), QStringLiteral("Area capture")},
-        {QStringLiteral("Esc"), QStringLiteral("Close")}};
-    if (!storedRegion_.isEmpty())
-      entries.insert(1, {QStringLiteral("R"), QStringLiteral("Last region")});
-    return entries;
-  }
+QVector<QPair<QString, QString>> ScrollCapturePanel::legendEntries() const {
   // Once a region exists the keyboard belongs to the page, which is what makes
   // it scrollable, so nothing here may promise a key. The buttons on screen
   // are the controls, and they say so themselves.
   return {};
 }
 
-QVector<QPair<QRect, ScrollCaptureOverlay::Grip>>
-ScrollCaptureOverlay::gripRects() const {
+QVector<QPair<QRect, ScrollCapturePanel::Grip>>
+ScrollCapturePanel::gripRects() const {
   // Every grip lives in the band *outside* the region, never over it: the
   // capture is that rectangle of the screen, so a bracket drawn inside it is a
   // bracket stitched into the result. Each corner is two arms, which is what
@@ -925,7 +869,7 @@ ScrollCaptureOverlay::gripRects() const {
   };
 }
 
-Qt::CursorShape ScrollCaptureOverlay::gripCursor(Grip grip) {
+Qt::CursorShape ScrollCapturePanel::gripCursor(Grip grip) {
   switch (grip) {
   case Grip::TopLeft:
   case Grip::BottomRight:
@@ -947,8 +891,8 @@ Qt::CursorShape ScrollCaptureOverlay::gripCursor(Grip grip) {
   return Qt::ArrowCursor;
 }
 
-ScrollCaptureOverlay::Grip
-ScrollCaptureOverlay::gripAt(const QPoint &point) const {
+ScrollCapturePanel::Grip
+ScrollCapturePanel::gripAt(const QPoint &point) const {
   if (phase_ != Phase::Selected || region_.isEmpty())
     return Grip::None;
   // Corners are listed first and sides overlap them at the ends, so the first
@@ -966,7 +910,7 @@ ScrollCaptureOverlay::gripAt(const QPoint &point) const {
   return Grip::None;
 }
 
-void ScrollCaptureOverlay::applyGrip(const QPoint &point) {
+void ScrollCapturePanel::applyGrip(const QPoint &point) {
   const QRect surface = rect();
   const QPoint delta = point - gripStartPoint_;
   QRect updated = gripStartRegion_;
@@ -1012,53 +956,35 @@ void ScrollCaptureOverlay::applyGrip(const QPoint &point) {
   region_ = updated;
 }
 
-QRect ScrollCaptureOverlay::backButtonRect() const {
+QRect ScrollCapturePanel::backButtonRect() const {
   return scrollOverlayPillRect(rect(), region_, capturePillCount(),
                                autoStalled_ ? 2 : 1, 132, 40, 12);
 }
-QRect ScrollCaptureOverlay::cancelButtonRect() const {
+QRect ScrollCapturePanel::cancelButtonRect() const {
   return scrollOverlayPillRect(rect(), region_, capturePillCount(),
                                autoStalled_ ? 3 : 2, 132, 40, 12);
 }
-QRect ScrollCaptureOverlay::selectedCancelButtonRect() const {
+QRect ScrollCapturePanel::selectedCancelButtonRect() const {
   return modeButtonRect(kModeButtonCount);
 }
-QRect ScrollCaptureOverlay::modeButtonRect(int index) const {
+QRect ScrollCapturePanel::modeButtonRect(int index) const {
   // The mode pills plus an explicit Cancel: Esc alone cannot be the way out,
   // because the keyboard belongs to the page whenever the pointer is over it.
   return scrollOverlayPillRect(rect(), region_, kModeButtonCount + 1, index,
                                kModeButtonWidth, kModeButtonHeight,
                                kModeButtonGap);
 }
-int ScrollCaptureOverlay::modeButtonAt(const QPoint &point) const {
+int ScrollCapturePanel::modeButtonAt(const QPoint &point) const {
   for (int index = 0; index < kModeButtonCount; ++index)
     if (modeButtonRect(index).contains(point))
       return index;
   return -1;
 }
 
-void ScrollCaptureOverlay::paintEvent(QPaintEvent *) {
+void ScrollCapturePanel::paintEvent(QPaintEvent *) {
   QPainter painter(this);
   painter.setRenderHint(QPainter::Antialiasing);
-  if (phase_ == Phase::Selecting) {
-    const QRect r = dragging_ ? regionLogical() : QRect();
-    painter.setCompositionMode(QPainter::CompositionMode_Source);
-    painter.fillRect(rect(), kDim);
-    if (!r.isEmpty()) {
-      painter.fillRect(r, Qt::transparent);
-      painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-      painter.setPen(QPen(kAccent, 2));
-      painter.setBrush(Qt::NoBrush);
-      painter.drawRect(r.adjusted(-2, -2, 2, 2));
-    } else {
-      // The same full-width crosshairs the region capture draws: they line the
-      // pointer up with what is on screen before the drag starts.
-      painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-      painter.setPen(QPen(QColor(255, 255, 255, 56), 1));
-      painter.drawLine(QPointF(cursor_.x(), 0), QPointF(cursor_.x(), height()));
-      painter.drawLine(QPointF(0, cursor_.y()), QPointF(width(), cursor_.y()));
-    }
-  } else {
+  {
     painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.fillRect(rect(), kDim);
     painter.fillRect(region_, Qt::transparent);
@@ -1155,7 +1081,7 @@ void ScrollCaptureOverlay::paintEvent(QPaintEvent *) {
   drawStatusPill(painter, rect(), status_);
 }
 
-void ScrollCaptureOverlay::wheelEvent(QWheelEvent *event) {
+void ScrollCapturePanel::wheelEvent(QWheelEvent *event) {
   // The hole passes the wheel to the page; the overlay only sees wheel over its
   // own chrome. Log it (debug runs), during capture a wheel event arriving with
   // the pointer inside the region would mean the input-region hole is not in
@@ -1168,7 +1094,7 @@ void ScrollCaptureOverlay::wheelEvent(QWheelEvent *event) {
   QWidget::wheelEvent(event);
 }
 
-void ScrollCaptureOverlay::enterEvent(QEnterEvent *event) {
+void ScrollCapturePanel::enterEvent(QEnterEvent *event) {
   updateKeyboardZone(event->position().toPoint());
   if (worker_ && !worker_->debugDir.isEmpty())
     qInfo().noquote() << QStringLiteral("scroll: pointer entered overlay at %1,%2")
@@ -1177,18 +1103,17 @@ void ScrollCaptureOverlay::enterEvent(QEnterEvent *event) {
   QWidget::enterEvent(event);
 }
 
-void ScrollCaptureOverlay::leaveEvent(QEvent *event) {
+void ScrollCapturePanel::leaveEvent(QEvent *event) {
   // The pointer is off our input region entirely, over the page, or off the
   // screen. Either way it is not on our chrome, so the keyboard goes back to
   // whatever is under it and the page can be scrolled again.
-  if (phase_ != Phase::Selecting)
-    setKeyboardGrab(false);
+  setKeyboardGrab(false);
   if (worker_ && !worker_->debugDir.isEmpty())
     qInfo().noquote() << QStringLiteral("scroll: pointer left overlay");
   QWidget::leaveEvent(event);
 }
 
-void ScrollCaptureOverlay::mousePressEvent(QMouseEvent *event) {
+void ScrollCapturePanel::mousePressEvent(QMouseEvent *event) {
   if (event->button() == Qt::RightButton) {
     cancel();
     return;
@@ -1198,8 +1123,11 @@ void ScrollCaptureOverlay::mousePressEvent(QMouseEvent *event) {
   if (const int tab = captureTabAt(captureTabLayout(rect()), event->position());
       tab >= 0) {
     const CaptureKind kind = captureTabLayout(rect()).at(tab).kind;
-    if (kind != CaptureKind::Scroll)
-      switchToArea(kind);
+    if (kind != CaptureKind::Scroll) {
+      stopWorker();
+      phase_ = Phase::Finished;
+      emit tabRequested(kind);
+    }
     return;
   }
   if (phase_ == Phase::Capturing) {
@@ -1242,45 +1170,23 @@ void ScrollCaptureOverlay::mousePressEvent(QMouseEvent *event) {
       applyInputRegion();
       return;
     }
-    // Anywhere else, that is, anywhere on the chrome, starts a fresh selection,
-    // which takes the whole surface and the keyboard back.
-    phase_ = Phase::Selecting;
-    dragStart_ = point;
-    dragEnd_ = point;
-    dragging_ = true;
-    applyInputRegion();
-    setCursor(Qt::CrossCursor);
-    setKeyboardGrab(true); // drawing a region again wants Esc and Enter back
-    setStatus(QStringLiteral("Drag to select a scroll region · A switches to "
-                             "area capture"));
-    update();
+    // Anywhere else, that is, anywhere on the chrome, asks for a fresh
+    // region: the editor's own selection takes it from here.
+    stopWorker();
+    phase_ = Phase::Finished;
+    emit dismissed();
     return;
   }
-  if (phase_ != Phase::Selecting)
-    return;
-  dragStart_ = event->position().toPoint();
-  dragEnd_ = dragStart_;
-  dragging_ = true;
-  update();
 }
 
-void ScrollCaptureOverlay::mouseMoveEvent(QMouseEvent *event) {
+void ScrollCapturePanel::mouseMoveEvent(QMouseEvent *event) {
   const QPoint point = event->position().toPoint();
   cursor_ = point;
-  if (phase_ == Phase::Selecting) {
-    setCursor(Qt::CrossCursor);
-    if (dragging_)
-      dragEnd_ = point;
-    update(); // the crosshairs follow the pointer
-    if (dragging_)
-      return;
-  }
+  update(); // the tab strip's hover hint follows the pointer
   updateKeyboardZone(point);
   if (activeGrip_ != Grip::None) {
     // The button is down, so motion keeps arriving even over the hole.
     applyGrip(point);
-    dragStart_ = region_.topLeft();
-    dragEnd_ = region_.bottomRight();
     applyInputRegion(); // the hole follows the region as it is dragged
     update();
     return;
@@ -1289,29 +1195,16 @@ void ScrollCaptureOverlay::mouseMoveEvent(QMouseEvent *event) {
     setCursor(gripCursor(gripAt(point)));
 }
 
-void ScrollCaptureOverlay::mouseReleaseEvent(QMouseEvent *event) {
+void ScrollCapturePanel::mouseReleaseEvent(QMouseEvent *event) {
   if (event->button() == Qt::LeftButton && activeGrip_ != Grip::None) {
     activeGrip_ = Grip::None;
-    rememberRegion();
     applyInputRegion();
     update();
     return;
   }
-  if (event->button() != Qt::LeftButton || phase_ != Phase::Selecting ||
-      !dragging_)
-    return;
-  dragEnd_ = event->position().toPoint();
-  dragging_ = false;
-  region_ = regionLogical();
-  if (region_.width() < kMinRegion || region_.height() < kMinRegion) {
-    update();
-    return; // too small; stay in selection
-  }
-  reserveChromeStrip();
-  enterSelected();
 }
 
-void ScrollCaptureOverlay::reserveChromeStrip() {
+void ScrollCapturePanel::reserveChromeStrip() {
   // Reserve a strip of real chrome: inside the hole the buttons' clicks fall
   // through and the chrome bakes into the capture, and a full-screen region
   // would empty the input mask entirely.
@@ -1320,21 +1213,19 @@ void ScrollCaptureOverlay::reserveChromeStrip() {
     region_.setBottom(height() - chromeStrip);
 }
 
-void ScrollCaptureOverlay::adoptRegion(const QRect &region) {
+void ScrollCapturePanel::begin(const QRect &region) {
   const QRect clamped = region.intersected(rect());
-  if (clamped.width() < kMinRegion || clamped.height() < kMinRegion)
+  if (clamped.width() < kMinRegion || clamped.height() < kMinRegion) {
+    emit dismissed();
     return;
+  }
   region_ = clamped;
-  dragStart_ = region_.topLeft();
-  dragEnd_ = region_.bottomRight();
   reserveChromeStrip();
-  adoptedRegion_ = true;
+  enterSelected();
 }
 
-void ScrollCaptureOverlay::enterSelected() {
+void ScrollCapturePanel::enterSelected() {
   phase_ = Phase::Selected;
-  dragging_ = false;
-  rememberRegion();
   applyInputRegion();
   setCursor(Qt::ArrowCursor); // the grips take it from here
   setKeyboardGrab(false);
@@ -1343,7 +1234,7 @@ void ScrollCaptureOverlay::enterSelected() {
   update();
 }
 
-void ScrollCaptureOverlay::keyPressEvent(QKeyEvent *event) {
+void ScrollCapturePanel::keyPressEvent(QKeyEvent *event) {
   if (event->key() == Qt::Key_Escape) {
     cancel();
     return;
@@ -1355,13 +1246,6 @@ void ScrollCaptureOverlay::keyPressEvent(QKeyEvent *event) {
     finishCapture();
     return;
   }
-  // Before a region exists there is no capture to switch the mode of, so A
-  // means the other kind of capture entirely: hand back to area capture, which
-  // relaunches rather than making anyone close this and start again.
-  if (phase_ == Phase::Selecting && event->key() == Qt::Key_A) {
-    switchToArea(CaptureKind::Region);
-    return;
-  }
   // A shortcut, never the advertised way: only the pointer being on our own
   // chrome puts the keyboard here at all.
   if ((phase_ == Phase::Selected || phase_ == Phase::Capturing) &&
@@ -1369,77 +1253,6 @@ void ScrollCaptureOverlay::keyPressEvent(QKeyEvent *event) {
     switchMode(event->key() == Qt::Key_A ? Mode::Auto : Mode::Manual);
     return;
   }
-  // R brings back the last region as a normal selection, so the grips adjust
-  // it from there.
-  if (phase_ == Phase::Selecting && !storedRegion_.isEmpty() &&
-      event->key() == Qt::Key_R) {
-    region_ = storedRegion_;
-    dragStart_ = region_.topLeft();
-    dragEnd_ = region_.bottomRight();
-    enterSelected();
-    return;
-  }
   // While capturing the layer holds no keyboard, so no key arrives here.
   QWidget::keyPressEvent(event);
-}
-
-void ScrollCaptureOverlay::switchToArea(CaptureKind kind) {
-  // Hand back to the area overlay in `kind`, which relaunches rather than
-  // making anyone close this and start again.
-  switchedToArea_ = true;
-  areaKind_ = kind;
-  stopWorker();
-  phase_ = Phase::Finished;
-  close();
-}
-
-QImage runScrollCapture(const MonitorInfo &monitor, QString &error,
-                        bool *switchedToArea, const QRect &initialRegion,
-                        CaptureKind *areaKind) {
-  QScreen *targetScreen = QGuiApplication::primaryScreen();
-  for (QScreen *screen : QGuiApplication::screens()) {
-    if (screen->name() == monitor.name) {
-      targetScreen = screen;
-      break;
-    }
-  }
-  ScrollCaptureOverlay overlay(monitor);
-  overlay.setScreen(targetScreen);
-  overlay.setGeometry(targetScreen->geometry());
-  overlay.winId();
-  QWindow *window = overlay.windowHandle();
-  LayerShellQt::Window *layer =
-      window ? LayerShellQt::Window::get(window) : nullptr;
-  if (!window || !layer) {
-    error = QStringLiteral("Could not create scroll-capture overlay layer");
-    return {};
-  }
-  layer->setScope(QStringLiteral("omasnap-scroll"));
-  layer->setScreen(targetScreen);
-  layer->setLayer(LayerShellQt::Window::LayerOverlay);
-  LayerShellQt::Window::Anchors anchors;
-  anchors.setFlag(LayerShellQt::Window::AnchorTop);
-  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-  anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-  anchors.setFlag(LayerShellQt::Window::AnchorRight);
-  layer->setAnchors(anchors);
-  layer->setExclusiveZone(-1);
-  layer->setKeyboardInteractivity(
-      LayerShellQt::Window::KeyboardInteractivityExclusive);
-  layer->setActivateOnShow(true);
-  overlay.setLayerWindow(layer);
-  if (!initialRegion.isNull())
-    overlay.adoptRegion(initialRegion);
-  overlay.show();
-  overlay.setFocus(Qt::ActiveWindowFocusReason);
-
-  // Run until the overlay closes (WA_DeleteOnClose is off by default, so the
-  // widget survives close() and its result stays readable).
-  while (overlay.isVisible())
-    QApplication::processEvents(QEventLoop::WaitForMoreEvents);
-  if (switchedToArea)
-    *switchedToArea = overlay.switchedToArea();
-  if (areaKind)
-    *areaKind = overlay.areaKind();
-  return overlay.result();
 }
