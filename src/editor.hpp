@@ -62,6 +62,11 @@ public:
    * Used by finish() and the headless smoke suite.
    */
   bool waitForSnapshot();
+  /**
+   * Blocks until an in-flight export (finish) has completed, letting the
+   * event loop run so completeFinish() can act. Headless smoke suite only.
+   */
+  void waitForExport();
   /** Renders the current selection and layer data for headless verification. */
   [[nodiscard]] QImage renderCurrentOutput() const;
   /**
@@ -158,6 +163,14 @@ private:
 
   struct OcrResult {
     QString text;
+    QString error;
+  };
+  /// What the export worker hands back: the saved path (Save/Both) or an
+  /// error. Rendering, PNG encoding and the clipboard round trip all run off
+  /// the UI thread; a tall scroll capture takes seconds to encode.
+  struct FinishResult {
+    OutputMode mode = OutputMode::Copy;
+    QString saved;
     QString error;
   };
 
@@ -345,6 +358,7 @@ private:
   void redoEdit();
   void selectWindowInDirection(int key);
   void finish(OutputMode mode);
+  void completeFinish(const FinishResult &result);
   void handleEscape();
   void handleToolbar(const QString &action);
   void paintEdit(QPainter &painter);
@@ -523,6 +537,7 @@ private:
   QPointF panAnchor_;
   QColor textColor_;
   QFutureWatcher<OcrResult> ocrWatcher_;
+  QFutureWatcher<FinishResult> finishWatcher_;
   /// The region being read (annotation coordinates). While tesseract runs a
   /// scan band sweeps it; once done the recognized text sits over it for a
   /// few seconds (or until the next click/key) so you can see what was copied.

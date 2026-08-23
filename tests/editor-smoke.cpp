@@ -1188,7 +1188,7 @@ bool runCrashSnapshotChecks(const CaptureData &capture, QString &error) {
     referenceBuffer.open(QIODevice::WriteOnly);
     current.save(&referenceBuffer, "PNG");
     QTest::keyClick(&editor, Qt::Key_S, Qt::ControlModifier);
-    QCoreApplication::processEvents();
+    editor.waitForExport();
     const QStringList files =
         QDir(directory.path())
             .entryList({QStringLiteral("*.png")}, QDir::Files);
@@ -5502,7 +5502,7 @@ int main(int argc, char **argv) {
     QTest::mouseMove(&quickEditor, QPoint(650, 470), 20);
     QTest::mouseRelease(&quickEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(650, 470));
-    application.processEvents();
+    quickEditor.waitForExport();
     const QStringList files =
         QDir(savedRoot).entryList({QStringLiteral("*.png")}, QDir::Files);
     if (quickEditor.isVisible() || files.size() != 1 ||
@@ -6271,7 +6271,7 @@ int main(int argc, char **argv) {
     if (snapshotBeforeSave.isNull())
       return 59;
     QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
-    application.processEvents();
+    finishEditor.waitForExport();
     const QStringList savedFiles =
         QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
             .entryList({QStringLiteral("*.png")}, QDir::Files);

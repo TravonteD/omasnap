@@ -750,6 +750,9 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     });
   });
 
+  connect(&finishWatcher_, &QFutureWatcher<FinishResult>::finished, this,
+          [this] { completeFinish(finishWatcher_.result()); });
+
   connect(&snapshotWatcher_, &QFutureWatcher<bool>::finished, this, [this] {
     snapshotBusy_ = false;
     snapshotWriteOk_ = snapshotWatcher_.result();
@@ -2448,6 +2451,17 @@ bool CaptureEditor::waitForSnapshot() {
   return snapshotWriteOk_;
 }
 
+void CaptureEditor::waitForExport() {
+  // Wait for the worker, then let the queued finished() signal reach
+  // completeFinish(). On success that closes the editor; busy_ stays set.
+  while (finishWatcher_.isRunning()) {
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    QThread::yieldCurrentThread();
+  }
+  for (int pass = 0; pass < 3; ++pass)
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
 void CaptureEditor::pinSnapshot() {
   if (busy_ || pinPending_ || selection_.isEmpty())
     return;
@@ -2835,54 +2849,73 @@ void CaptureEditor::finish(OutputMode mode) {
   if (busy_ || selection_.isEmpty())
     return;
   busy_ = true;
-  setStatus(QStringLiteral("Preparing screenshot…"));
-  const QImage image = renderCurrentOutput();
-  QString error;
-  const QString exportPath = temporaryExportPath();
-  if (image.isNull() || exportPath.isEmpty() ||
-      !saveTemporarySnapshot(image, exportPath, error, -1)) {
-    busy_ = false;
-    setStatus(error.isEmpty()
-                  ? QStringLiteral("Could not prepare screenshot snapshot")
-                  : error);
-    return;
-  }
+  setStatus(mode == OutputMode::Copy ? QStringLiteral("Copying screenshot…")
+                                     : QStringLiteral("Saving screenshot…"));
+  // Everything the export needs is copied out so the render, the PNG encode
+  // and the wl-copy/wl-paste round trip can run on the worker pool. The
+  // overlay keeps painting (and its status stays readable) while a tall
+  // scroll capture grinds through libpng.
+  const CaptureData captureCopy = capture_;
+  const QRectF selection = selection_;
+  const QVector<Annotation> annotations = annotations_;
+  const BackgroundStyle background = backgroundStyle_;
+  const QString appSlug =
+      appFilenameSlug(dominantAppClass(capture_.windows, selection_));
+  finishWatcher_.setFuture(QtConcurrent::run([captureCopy, selection,
+                                              annotations, background, appSlug,
+                                              mode]() {
+    FinishResult result;
+    result.mode = mode;
+    const QImage image =
+        renderCapture(captureCopy, selection, annotations, background);
+    const QString exportPath = temporaryExportPath();
+    QString error;
+    if (image.isNull() || exportPath.isEmpty() ||
+        !saveTemporarySnapshot(image, exportPath, error, -1)) {
+      result.error = error.isEmpty()
+                         ? QStringLiteral("Could not prepare screenshot snapshot")
+                         : error;
+      return result;
+    }
+    if (mode == OutputMode::Copy || mode == OutputMode::Both) {
+      if (!copyPngFileToClipboard(exportPath, error)) {
+        QFile::remove(exportPath);
+        result.error = error;
+        return result;
+      }
+    }
+    if (mode == OutputMode::Save || mode == OutputMode::Both) {
+      result.saved = moveSnapshotToScreenshots(exportPath, error, appSlug);
+      if (result.saved.isEmpty()) {
+        QFile::remove(exportPath);
+        result.error = error;
+        return result;
+      }
+    } else {
+      QFile::remove(exportPath);
+    }
+    return result;
+  }));
+}
 
-  QString saved;
-  if (mode == OutputMode::Copy || mode == OutputMode::Both) {
-    if (!copyPngFileToClipboard(exportPath, error)) {
-      QFile::remove(exportPath);
-      busy_ = false;
-      setStatus(error);
-      return;
-    }
-  }
-  if (mode == OutputMode::Save || mode == OutputMode::Both) {
-    saved = moveSnapshotToScreenshots(
-        exportPath, error,
-        appFilenameSlug(dominantAppClass(capture_.windows, selection_)));
-    if (saved.isEmpty()) {
-      QFile::remove(exportPath);
-      busy_ = false;
-      setStatus(error);
-      return;
-    }
-  } else {
-    QFile::remove(exportPath);
+void CaptureEditor::completeFinish(const FinishResult &result) {
+  if (!result.error.isEmpty()) {
+    busy_ = false;
+    setStatus(result.error);
+    return;
   }
   if (!snapshotPath_.isEmpty()) {
     QFile::remove(workingLogPath());
     QFile::remove(snapshotPath_);
     snapshotPath_.clear();
   }
-
-  if (mode == OutputMode::Copy)
+  if (result.mode == OutputMode::Copy)
     sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"));
-  else if (mode == OutputMode::Save)
-    sendCaptureNotification(QStringLiteral("Screenshot saved"), saved);
+  else if (result.mode == OutputMode::Save)
+    sendCaptureNotification(QStringLiteral("Screenshot saved"), result.saved);
   else
     sendCaptureNotification(QStringLiteral("Screenshot saved and copied"),
-                            saved);
+                            result.saved);
   close();
 }
 
