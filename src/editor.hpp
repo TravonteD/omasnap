@@ -239,6 +239,8 @@ public:
   void setLayerWindow(LayerShellQt::Window *layer) { layer_ = layer; }
   /// Whether the select phase is in scroll mode. Test accessor.
   [[nodiscard]] bool scrollModeForTest() const { return scrollMode_; }
+  /// Hands a stitched image to the editor as the scroll panel would. Test hook.
+  void adoptStitchedForTest(const QImage &image) { adoptStitched(image); }
   /// Whether the scroll panel is up. Test accessor.
   [[nodiscard]] bool scrollPanelActiveForTest() const {
     return scrollPanel_ != nullptr;
@@ -374,6 +376,11 @@ private:
   void endScrollCapture();
   /// A stitched scroll capture becomes the image being edited.
   void adoptStitched(const QImage &image);
+  /// The editor's other mode of working: not a region of the frozen screen
+  /// but an image handed to it, with the op log it was last edited with.
+  /// `kind` is the tab lit for it.
+  void adoptImage(QImage image, OperationLog log, SelectTab kind,
+                  const QString &status);
   /// Leaves the select phase with a drawn region: edit it, or scroll it.
   void commitRegion(const QRectF &region, const QString &editStatus);
   /// Whether there is a live screen behind this capture to re-select from
@@ -462,8 +469,9 @@ private:
   /// not a change of tool.
   Tool toolBeforeEyedropper_ = Tool::Select;
   bool scrollMode_ = false;
-  /// The image being edited is a stitched scroll result, not the screen.
-  bool stitchedCapture_ = false;
+  /// The image being edited was handed to the editor (stitched scroll,
+  /// shelved capture) rather than cut from the frozen screen.
+  bool handedImage_ = false;
   /// The monitor as captured, kept apart from capture_.monitor (which a
   /// stitched result replaces) so the screen can be captured again.
   MonitorInfo liveMonitor_;

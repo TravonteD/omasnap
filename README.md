@@ -320,7 +320,7 @@ without reaching for the pointer.
 | `Enter` | Capture the highlighted window |
 | `Ctrl+A` | Select the full focused monitor (the Fullscreen tab) |
 | Hover the right-edge stack | Fan out the five most recent captures; click one to reopen it |
-| `Esc`, `Esc` | Dismiss |
+| `Esc` | Dismiss (while selecting; in the editor, `Esc` returns to Select and a second `Esc` closes) |
 
 ### Annotation editor
 

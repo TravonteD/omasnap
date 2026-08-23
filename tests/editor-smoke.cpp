@@ -5116,16 +5116,17 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  const auto click = [&](const QString &label) {
-    const QRectF tab = editor.selectTabRectForTest(label);
+  const auto clickOn = [&](CaptureEditor &target, const QString &label) {
+    const QRectF tab = target.selectTabRectForTest(label);
     if (tab.isNull())
       return false;
     const QPoint at = tab.center().toPoint();
-    QTest::mouseMove(&editor, at);
-    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, at);
+    QTest::mouseMove(&target, at);
+    QTest::mouseClick(&target, Qt::LeftButton, Qt::NoModifier, at);
     application.processEvents();
     return true;
   };
+  const auto click = [&](const QString &label) { return clickOn(editor, label); };
   if (editor.windowModeForTest()) {
     error = QStringLiteral("Select overlay did not start in region mode");
     return false;
@@ -5205,7 +5206,46 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
       error = QStringLiteral("Space did not cycle back round to scroll mode");
       return false;
     }
+    // A stitched result is handed to the same editor and annotates like any
+    // capture: the whole image is the selection, a drawn layer renders on it,
+    // and Esc then steps back rather than closing (the editor, not selecting).
+    QImage tall(400, 1800, QImage::Format_ARGB32);
+    tall.fill(QColor(QStringLiteral("#204060")));
+    scrollEditor.adoptStitchedForTest(tall);
+    application.processEvents();
+    if (scrollEditor.selectingForTest() ||
+        scrollEditor.renderCurrentOutput().size() != tall.size() ||
+        scrollEditor.scrollPanelActiveForTest()) {
+      error = QStringLiteral("Stitched image did not open in the editor whole");
+      return false;
+    }
+    QTest::keyClick(&scrollEditor, Qt::Key_R);
+    QTest::mousePress(&scrollEditor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(380, 200));
+    QTest::mouseMove(&scrollEditor, QPoint(420, 300), 20);
+    QTest::mouseRelease(&scrollEditor, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(420, 300));
+    application.processEvents();
+    if (scrollEditor.annotationCountForTest() != 1) {
+      error = QStringLiteral("Could not annotate the stitched image");
+      return false;
+    }
+    QTest::keyClick(&scrollEditor, Qt::Key_Escape);
+    application.processEvents();
+    if (!scrollEditor.isVisible() || scrollEditor.selectingForTest()) {
+      error = QStringLiteral("Esc in the editor closed or left it");
+      return false;
+    }
+    // Back to selecting through the tab: a handed image is not the screen,
+    // so the monitor is captured again and selection resumes in scroll mode.
+    if (!clickOn(scrollEditor, QStringLiteral("SCROLLING REGION")) ||
+        !scrollEditor.selectingForTest() || !scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Tab from a stitched edit did not return to "
+                             "selecting a scrolling region");
+      return false;
+    }
     scrollEditor.close();
+    application.processEvents();
   }
 
   // A file has no screen to go back to: no tabs in its editor.

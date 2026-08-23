@@ -2501,6 +2501,26 @@ void CaptureEditor::handleEscape() {
     update();
     return;
   }
+  // Selecting: there is nothing to step back from, so one Esc closes (the
+  // launch key then Esc is the quickest "never mind"). Only a drag in flight
+  // is cancelled first. Editing: Esc steps back to the select tool, and a
+  // second one close together closes.
+  if (phase_ == Phase::Select) {
+    if (!dragging_) {
+      close();
+      return;
+    }
+    dragging_ = false;
+    selection_ = {};
+    setStatus(windowMode_
+                  ? QStringLiteral("Window mode · click or Super+Arrows then "
+                                   "Enter · Space returns to area")
+                  : QStringLiteral(
+                        "Drag to select an area · Space selects a window"));
+    updatePointerCursor();
+    update();
+    return;
+  }
   const qint64 closeWindowMs =
       static_cast<qint64>(QApplication::doubleClickInterval()) * 2;
   if (escapeTimer_.isValid() && escapeTimer_.elapsed() <= closeWindowMs) {
@@ -2526,14 +2546,8 @@ void CaptureEditor::handleEscape() {
   colorPaletteOpen_ = false;
   customColorPickerOpen_ = false;
   freehandPoints_.clear();
-  if (phase_ == Phase::Edit) {
-    tool_ = Tool::Select;
-    setStatus(QStringLiteral("Select/move · Esc again to close"));
-  } else {
-    windowMode_ = false;
-    selection_ = {};
-    setStatus(QStringLiteral("Area mode · Esc again to close"));
-  }
+  tool_ = Tool::Select;
+  setStatus(QStringLiteral("Select/move · Esc again to close"));
   setFocus(Qt::OtherFocusReason);
   updatePointerCursor();
   update();
@@ -4676,37 +4690,65 @@ void CaptureEditor::adoptStitched(const QImage &image) {
     setScrollMode(true);
     return;
   }
-  // The stitched image is the capture now: physical pixels at scale 1, the
-  // monitor kept by name so the tabs can still capture it again.
-  capture_.source = image;
-  capture_.previewSize = image.size();
-  capture_.monitor.scale = 1.0;
-  capture_.monitor.pixelSize = image.size();
-  capture_.monitor.geometry = QRect(QPoint(0, 0), image.size());
-  capture_.windows.clear();
+  const bool veryLong = image.width() > stitch::kWidelyOpenableEdge ||
+                        image.height() > stitch::kWidelyOpenableEdge;
+  adoptImage(image, OperationLog(), SelectTab::Scroll,
+             veryLong
+                 ? QStringLiteral("Very long capture (%1 × %2) · edits and "
+                                  "saves here as usual, but many apps cannot "
+                                  "open images this large · crop it if you "
+                                  "need it elsewhere")
+                       .arg(image.width())
+                       .arg(image.height())
+                 : QStringLiteral("Scroll capture stitched · Select moves "
+                                  "layers · wheel zooms · outer handles crop"));
+}
+
+void CaptureEditor::adoptImage(QImage image, OperationLog log, SelectTab kind,
+                               const QString &status) {
+  // The editor normally works on a region of the frozen screen. Here it is
+  // handed an image instead (a stitched scroll, a shelved capture, a file)
+  // and edits that: the image is the whole capture, at the scale its log was
+  // written in, and the screen stays known by name so the tabs can capture
+  // it again.
+  if (scrollPanel_)
+    endScrollCapture();
+  if (textEditor_->isVisible()) {
+    textEditor_->clear();
+    textEditor_->hide();
+    textCaretTimer_.stop();
+  }
+  editingAnnotation_ = -1;
+  dragging_ = false;
+  interaction_ = Interaction::None;
+  const MonitorInfo live = liveMonitor_;
+  describeFileCapture(capture_, std::move(image), log);
+  capture_.monitor.name = live.name;
+  liveMonitor_ = live;
   pristineSource_ = capture_.source;
   pristineLogicalSize_ = capture_.previewSize;
   cuts_.clear();
-  ops_.clear();
-  opIndex_ = 0;
+  ops_ = std::move(log.ops);
+  opIndex_ = std::clamp(log.index, 0, static_cast<int>(ops_.size()));
+  nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
+  nextMarker_ = std::max(log.nextMarker, 1);
   redactionBaseStale_ = true;
   backdropKey_ = 0;
   scrollMode_ = false;
-  selection_ = QRectF(QPointF(), capture_.previewSize);
-  editedKind_ = SelectTab::Scroll;
-  stitchedCapture_ = true;
-  const bool veryLong =
-      capture_.previewSize.width() > stitch::kWidelyOpenableEdge ||
-      capture_.previewSize.height() > stitch::kWidelyOpenableEdge;
-  enterEdit(veryLong
-                ? QStringLiteral("Very long capture (%1 × %2) · edits and "
-                                 "saves here as usual, but many apps cannot "
-                                 "open images this large · crop it if you "
-                                 "need it elsewhere")
-                      .arg(capture_.previewSize.width())
-                      .arg(capture_.previewSize.height())
-                : QStringLiteral("Scroll capture stitched · Select moves "
-                                 "layers · wheel zooms · outer handles crop"));
+  windowMode_ = false;
+  hoveredWindow_ = -1;
+  handedImage_ = true;
+  editedKind_ = kind;
+  selectedAnnotation_ = -1;
+  selectedAnnotations_.clear();
+  if (ops_.isEmpty())
+    selection_ = QRectF(QPointF(), capture_.previewSize);
+  else
+    replayLog();
+  // A fresh working document: the old snapshot belonged to the screen.
+  snapshotPath_.clear();
+  sourceWritten_ = false;
+  enterEdit(status);
 }
 
 void CaptureEditor::returnToSelect(bool windowMode) {
@@ -4730,10 +4772,10 @@ void CaptureEditor::returnToSelect(bool windowMode) {
   ops_.clear();
   opIndex_ = 0;
   replayLog();
-  if (stitchedCapture_) {
+  if (handedImage_) {
     // A stitched result is not the screen; take the monitor again so the
     // frozen backdrop behind the next selection is current.
-    stitchedCapture_ = false;
+    handedImage_ = false;
     capture_ = CaptureData();
     capture_.monitor = liveMonitor_;
     pristineSource_ = {};
@@ -5033,35 +5075,10 @@ void CaptureEditor::reopenRecent(int index) {
     setStatus(QStringLiteral("Could not restore its layers: %1").arg(error));
     return;
   }
-  if (scrollPanel_)
-    endScrollCapture();
   setRecentsOpen(false);
-  const MonitorInfo live = liveMonitor_;
-  describeFileCapture(capture_, std::move(image), log);
-  capture_.monitor.name = live.name;
-  liveMonitor_ = live;
-  pristineSource_ = capture_.source;
-  pristineLogicalSize_ = capture_.previewSize;
-  cuts_.clear();
-  ops_ = std::move(log.ops);
-  opIndex_ = std::clamp(log.index, 0, static_cast<int>(ops_.size()));
-  nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
-  nextMarker_ = std::max(log.nextMarker, 1);
-  redactionBaseStale_ = true;
-  backdropKey_ = 0;
-  scrollMode_ = false;
-  windowMode_ = false;
-  stitchedCapture_ = true; // not the screen: going back captures it again
   editingRecent_ = recent;
-  captureMode_ = CaptureMode::Region;
-  editedKind_ = SelectTab::Region;
-  if (ops_.isEmpty())
-    selection_ = QRectF(QPointF(), capture_.previewSize);
-  else
-    replayLog();
-  snapshotPath_.clear();
-  sourceWritten_ = false;
-  enterEdit(QStringLiteral("Reopened recent capture · Copy/Save to output"));
+  adoptImage(std::move(image), std::move(log), SelectTab::Region,
+             QStringLiteral("Reopened recent capture · Copy/Save to output"));
 }
 
 void CaptureEditor::selectFullscreen() {
@@ -5135,7 +5152,7 @@ void CaptureEditor::paintSelect(QPainter &painter) {
                     {QStringLiteral("Ctrl+A"), QStringLiteral("Fullscreen")},
                     {QStringLiteral("R"), QStringLiteral("Last region")},
                     {QStringLiteral("S"), QStringLiteral("Scrolling region")},
-                    {QStringLiteral("Esc ×2"), QStringLiteral("Close")}});
+                    {QStringLiteral("Esc"), QStringLiteral("Close")}});
   drawStatusPill(painter, rect(), status_);
   drawMeasureBadge(painter, rect(), cursor_, measurementText());
 }
