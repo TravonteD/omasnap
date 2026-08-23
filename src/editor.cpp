@@ -2905,6 +2905,10 @@ void CaptureEditor::completeFinish(const FinishResult &result) {
     return;
   }
   if (!snapshotPath_.isEmpty()) {
+    // A crash-snapshot write may still be in flight; let it land before the
+    // file goes, or it reappears a moment after the editor closed.
+    waitForSnapshot();
+    snapshotDirty_ = false;
     QFile::remove(workingLogPath());
     QFile::remove(snapshotPath_);
     snapshotPath_.clear();
