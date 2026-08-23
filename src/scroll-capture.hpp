@@ -123,6 +123,9 @@ class Window;
 class ScrollCaptureOverlay final : public QWidget {
 public:
   explicit ScrollCaptureOverlay(MonitorInfo monitor, QWidget *parent = nullptr);
+  /// Start with `region` selected (clamped to the surface and the chrome
+  /// strip) instead of waiting for a drag. Call before show().
+  void adoptRegion(const QRect &region);
   ~ScrollCaptureOverlay() override;
 
   /// The layer surface backing this widget; used to toggle keyboard
@@ -251,6 +254,10 @@ private:
   /// one that still fits. Not shown until asked for: most captures are of
   /// somewhere new, so the overlay opens empty and R brings this back.
   QRect storedRegion_;
+  /// A region adopted before show(); enterSelected() runs on the first show
+  /// so the layer, input region and grab state are set up by then.
+  bool adoptedRegion_ = false;
+  void reserveChromeStrip();
   /// The badge's × , as the shared chrome laid it out this frame.
   QRectF modeBadgeClose_;
   /// The grip being dragged, and what the region and pointer were when it
@@ -274,5 +281,9 @@ private:
 /// Runs a manual scroll capture on `monitor` (its own exclusive layer surface
 /// and event loop). Returns the stitched image, or a null image if cancelled
 /// or on error (with `error` set).
+/// `initialRegion` (logical monitor coordinates) opens the overlay with that
+/// frame already in place, as if it had just been drawn; null starts with
+/// the drag. The area editor passes the region it was editing.
 [[nodiscard]] QImage runScrollCapture(const MonitorInfo &monitor,
-                                      QString &error, bool *switchedToArea);
+                                      QString &error, bool *switchedToArea,
+                                      const QRect &initialRegion = {});

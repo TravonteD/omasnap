@@ -205,6 +205,13 @@ void ScrollCaptureOverlay::setLayerWindow(LayerShellQt::Window *layer) {
 
 void ScrollCaptureOverlay::showEvent(QShowEvent *event) {
   QWidget::showEvent(event);
+  if (adoptedRegion_ && phase_ == Phase::Selecting) {
+    // Handed a region by the area editor: open with it selected, the layer
+    // and input region now being real.
+    adoptedRegion_ = false;
+    enterSelected();
+    return;
+  }
   // Read the last region now that the surface has its real size; one written
   // for a different screen or monitor is ignored. The overlay still opens empty
   // and inviting a drag, since most captures are of somewhere new, and R
@@ -1300,13 +1307,28 @@ void ScrollCaptureOverlay::mouseReleaseEvent(QMouseEvent *event) {
     update();
     return; // too small; stay in selection
   }
+  reserveChromeStrip();
+  enterSelected();
+}
+
+void ScrollCaptureOverlay::reserveChromeStrip() {
   // Reserve a strip of real chrome: inside the hole the buttons' clicks fall
   // through and the chrome bakes into the capture, and a full-screen region
   // would empty the input mask entirely.
   constexpr int chromeStrip = 40 + 18 + 12;
   if (region_.top() < chromeStrip && region_.bottom() > height() - chromeStrip)
     region_.setBottom(height() - chromeStrip);
-  enterSelected();
+}
+
+void ScrollCaptureOverlay::adoptRegion(const QRect &region) {
+  const QRect clamped = region.intersected(rect());
+  if (clamped.width() < kMinRegion || clamped.height() < kMinRegion)
+    return;
+  region_ = clamped;
+  dragStart_ = region_.topLeft();
+  dragEnd_ = region_.bottomRight();
+  reserveChromeStrip();
+  adoptedRegion_ = true;
 }
 
 void ScrollCaptureOverlay::enterSelected() {
@@ -1365,7 +1387,7 @@ void ScrollCaptureOverlay::keyPressEvent(QKeyEvent *event) {
 }
 
 QImage runScrollCapture(const MonitorInfo &monitor, QString &error,
-                        bool *switchedToArea) {
+                        bool *switchedToArea, const QRect &initialRegion) {
   QScreen *targetScreen = QGuiApplication::primaryScreen();
   for (QScreen *screen : QGuiApplication::screens()) {
     if (screen->name() == monitor.name) {
@@ -1398,6 +1420,8 @@ QImage runScrollCapture(const MonitorInfo &monitor, QString &error,
       LayerShellQt::Window::KeyboardInteractivityExclusive);
   layer->setActivateOnShow(true);
   overlay.setLayerWindow(layer);
+  if (!initialRegion.isNull())
+    overlay.adoptRegion(initialRegion);
   overlay.show();
   overlay.setFocus(Qt::ActiveWindowFocusReason);
 

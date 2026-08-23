@@ -782,6 +782,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
             switch (pendingMode_) {
             case CaptureMode::Fullscreen:
               selection_ = QRectF(QPointF(), capture_.previewSize);
+              editedKind_ = SelectTab::Fullscreen;
               enterEdit(QStringLiteral(
                   "Full screen selected · native resolution · outer handles "
                   "crop"));
@@ -827,6 +828,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     close();
   });
 
+  captureMode_ = mode;
   if (capture_.source.isNull()) {
     // The pixel capture has not landed yet; the overlay shows a Capturing…
     // state until startCapture() completes.
@@ -834,6 +836,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     pendingMode_ = mode;
     setStatus(QStringLiteral("Capturing screen…"));
   } else if (mode == CaptureMode::Fullscreen || mode == CaptureMode::File) {
+    editedKind_ = SelectTab::Fullscreen;
     if (ops_.isEmpty())
       selection_ = QRectF(QPointF(), capture_.previewSize);
     else
@@ -2579,6 +2582,7 @@ void CaptureEditor::chooseWindow(int index) {
   selection_ = QRectF(capture_.windows.at(index).rect);
   redactionBaseStale_ = true;
   windowMode_ = false;
+  editedKind_ = SelectTab::Window;
   enterEdit(QStringLiteral(
       "Window selected · Select moves layers · wheel zooms · outer handles "
       "crop"));
@@ -3119,6 +3123,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
                                 capture_.monitor.name, size());
           if (!region.isEmpty()) {
             selection_ = QRectF(region);
+            editedKind_ = SelectTab::Region;
             enterEdit(QStringLiteral("Last area restored · Select moves "
                                      "layers · wheel zooms · outer handles "
                                      "crop"));
@@ -3730,11 +3735,19 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     return;
   cursor_ = event->position();
   endNudgeRun();
+  if (const int tab = selectTabAt(cursor_); tab >= 0) {
+    if (phase_ == Phase::Edit && textEditor_->isVisible())
+      acceptText();
+    activateSelectTab(selectTabItems().at(tab).tab);
+    return;
+  }
+  if (phase_ == Phase::Edit && scrollPillRect().contains(cursor_)) {
+    if (textEditor_->isVisible())
+      acceptText();
+    switchToScroll(selection_.toRect());
+    return;
+  }
   if (phase_ == Phase::Select) {
-    if (const int tab = selectTabAt(cursor_); tab >= 0) {
-      activateSelectTab(selectTabItems().at(tab).tab);
-      return;
-    }
     if (windowMode_) {
       chooseWindow(windowAt(cursor_));
       return;
@@ -4039,6 +4052,7 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
                                         selection_.toRect())
                          .toUtf8());
       }
+      editedKind_ = SelectTab::Region;
       enterEdit(QStringLiteral("Area selected · Select moves layers · wheel "
                                "zooms · outer handles crop"));
     }
@@ -4407,6 +4421,10 @@ void CaptureEditor::updatePointerCursor() {
                                                        : Qt::CrossCursor);
     return;
   }
+  if (selectTabAt(cursor_) >= 0 || scrollPillRect().contains(cursor_)) {
+    setCursor(Qt::PointingHandCursor);
+    return;
+  }
   if ((colorPaletteOpen_ && colorPaletteRect().contains(cursor_)) ||
       (customColorPickerOpen_ && customColorPanelRect().contains(cursor_)) ||
       (shapeMenuOpen_ && shapeMenuRect().contains(cursor_))) {
@@ -4518,7 +4536,9 @@ QString CaptureEditor::selectTabLabel(SelectTab tab) {
 }
 
 QVector<CaptureEditor::SelectTabItem> CaptureEditor::selectTabItems() const {
-  if (phase_ != Phase::Select || capture_.source.isNull())
+  // In the edit phase the strip stays as the way back: a tab there returns
+  // to the select phase in that mode. A file has no screen to go back to.
+  if (capture_.source.isNull() || (phase_ == Phase::Edit && !hasLiveScreen()))
     return {};
   static const SelectTab order[] = {SelectTab::Region, SelectTab::Scroll,
                                     SelectTab::Window, SelectTab::Fullscreen};
@@ -4553,15 +4573,17 @@ int CaptureEditor::selectTabAt(const QPointF &position) const {
 }
 
 void CaptureEditor::activateSelectTab(SelectTab tab) {
+  if (phase_ == Phase::Edit && tab != SelectTab::Scroll)
+    returnToSelect(tab == SelectTab::Window);
   switch (tab) {
   case SelectTab::Region:
     setWindowMode(false);
     break;
   case SelectTab::Scroll:
-    // Hand over to the scroll overlay before any pixels are taken; main()
-    // runs it on this monitor and its A tab comes straight back here.
-    switchedToScroll_ = true;
-    close();
+    // Hand over to the scroll overlay; main() runs it on this monitor and
+    // its A tab comes straight back here. From the editor the drawn region
+    // goes along, so the scroll frame starts where this capture was.
+    switchToScroll(phase_ == Phase::Edit ? selection_.toRect() : QRect());
     break;
   case SelectTab::Window:
     setWindowMode(true);
@@ -4570,6 +4592,77 @@ void CaptureEditor::activateSelectTab(SelectTab tab) {
     selectFullscreen();
     break;
   }
+}
+
+bool CaptureEditor::hasLiveScreen() const {
+  return captureMode_ != CaptureMode::File && !capture_.monitor.name.isEmpty();
+}
+
+void CaptureEditor::switchToScroll(const QRect &region) {
+  switchedToScroll_ = true;
+  scrollRegion_ = region;
+  close();
+}
+
+void CaptureEditor::returnToSelect(bool windowMode) {
+  if (textEditor_->isVisible()) {
+    textEditor_->clear();
+    textEditor_->hide();
+    textCaretTimer_.stop();
+  }
+  editingAnnotation_ = -1;
+  dragging_ = false;
+  cutDragActive_ = false;
+  marqueeSelecting_ = false;
+  interaction_ = Interaction::None;
+  colorPaletteOpen_ = false;
+  customColorPickerOpen_ = false;
+  shapeMenuOpen_ = false;
+  textSizeMenuOpen_ = false;
+  dismissOcrOverlay();
+  // Everything edited derives from the op log; an empty log is the untouched
+  // screen again.
+  ops_.clear();
+  opIndex_ = 0;
+  replayLog();
+  phase_ = Phase::Select;
+  tool_ = Tool::Select;
+  viewZoom_ = 1.0;
+  viewOffset_ = {};
+  selection_ = {};
+  windowMode_ = windowMode;
+  hoveredWindow_ = windowMode_ ? windowAt(cursor_) : -1;
+  redactionBaseStale_ = true;
+  scheduleSnapshot();
+  setStatus(windowMode_
+                ? QStringLiteral("Window mode · click or Super+Arrows then "
+                                 "Enter · Space returns to area")
+                : QStringLiteral(
+                      "Drag to select an area · Space selects a window"));
+  updatePointerCursor();
+  update();
+}
+
+QRectF CaptureEditor::scrollPillRect() const {
+  if (phase_ != Phase::Edit || !hasLiveScreen() || dragging_ ||
+      capturePending_ || busy_)
+    return {};
+  const QRectF image = editImageRect();
+  if (image.isEmpty())
+    return {};
+  QFont font(QStringLiteral("Noto Sans"));
+  font.setPixelSize(11);
+  font.setBold(true);
+  const qreal width =
+      QFontMetricsF(font).horizontalAdvance(QStringLiteral("SCROLL CAPTURE")) +
+      28;
+  constexpr qreal height = 22.0;
+  // Just under the image, clear of the crop handles; inside the viewport if
+  // the image reaches the bottom band.
+  qreal y = image.bottom() + 14;
+  if (y + height > this->height() - 60)
+    y = image.bottom() - height - 10;
+  return QRectF(image.center().x() - width / 2.0, y, width, height);
 }
 
 void CaptureEditor::setWindowMode(bool enabled) {
@@ -4591,9 +4684,55 @@ void CaptureEditor::selectFullscreen() {
   dragging_ = false;
   hoveredWindow_ = -1;
   selection_ = QRectF(QPointF(), capture_.previewSize);
+  editedKind_ = SelectTab::Fullscreen;
   enterEdit(QStringLiteral(
       "Full screen selected · native resolution · outer handles crop"));
   update();
+}
+
+void CaptureEditor::paintSelectTabs(QPainter &painter) {
+  // Capture-kind tabs. In the select phase the lit one is the mode the
+  // pointer is in; in the edit phase it is how this capture was taken.
+  const QVector<SelectTabItem> tabs = selectTabItems();
+  if (!tabs.isEmpty()) {
+    // Hangs off the top edge like a tab strip: square at the top (drawn past
+    // the edge so only the bottom corners round), not a floating pill.
+    QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
+                     .adjusted(-5, -30, 5, 5);
+    painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
+    painter.setBrush(QColor(18, 18, 22, 235));
+    painter.drawRoundedRect(bar, 12, 12);
+    QFont tabFont(QStringLiteral("Noto Sans"));
+    tabFont.setBold(true);
+    tabFont.setPixelSize(11);
+    painter.setFont(tabFont);
+    const int hovered = selectTabAt(cursor_);
+    for (int index = 0; index < tabs.size(); ++index) {
+      const SelectTabItem &item = tabs.at(index);
+      const bool active =
+          item.tab == (phase_ == Phase::Edit
+                           ? editedKind_
+                           : windowMode_ ? SelectTab::Window
+                                         : SelectTab::Region);
+      painter.setPen(Qt::NoPen);
+      if (active) {
+        painter.setBrush(item.tab == SelectTab::Window
+                             ? QColor(QStringLiteral("#ffd60a"))
+                         : item.tab == SelectTab::Fullscreen
+                             ? QColor(QStringLiteral("#0a84ff"))
+                             : QColor(QStringLiteral("#30d158")));
+        painter.drawRoundedRect(item.rect, 9, 9);
+        painter.setPen(QColor(18, 18, 22));
+      } else {
+        if (index == hovered) {
+          painter.setBrush(QColor(255, 255, 255, 28));
+          painter.drawRoundedRect(item.rect, 9, 9);
+        }
+        painter.setPen(QColor(255, 255, 255, index == hovered ? 255 : 190));
+      }
+      painter.drawText(item.rect, Qt::AlignCenter, selectTabLabel(item.tab));
+    }
+  }
 }
 
 void CaptureEditor::paintSelect(QPainter &painter) {
@@ -4640,43 +4779,7 @@ void CaptureEditor::paintSelect(QPainter &painter) {
     painter.drawLine(QPointF(0, cursor_.y()), QPointF(width(), cursor_.y()));
   }
 
-  // Capture-kind tabs. The lit one is the mode the pointer is in; Fullscreen
-  // never lights because it acts the moment it is picked.
-  const QVector<SelectTabItem> tabs = selectTabItems();
-  if (!tabs.isEmpty()) {
-    // Hangs off the top edge like a tab strip: square at the top (drawn past
-    // the edge so only the bottom corners round), not a floating pill.
-    QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
-                     .adjusted(-5, -30, 5, 5);
-    painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
-    painter.setBrush(QColor(18, 18, 22, 235));
-    painter.drawRoundedRect(bar, 12, 12);
-    QFont tabFont(QStringLiteral("Noto Sans"));
-    tabFont.setBold(true);
-    tabFont.setPixelSize(11);
-    painter.setFont(tabFont);
-    const int hovered = selectTabAt(cursor_);
-    for (int index = 0; index < tabs.size(); ++index) {
-      const SelectTabItem &item = tabs.at(index);
-      const bool active =
-          item.tab == (windowMode_ ? SelectTab::Window : SelectTab::Region);
-      painter.setPen(Qt::NoPen);
-      if (active) {
-        painter.setBrush(item.tab == SelectTab::Window
-                             ? QColor(QStringLiteral("#ffd60a"))
-                             : QColor(QStringLiteral("#30d158")));
-        painter.drawRoundedRect(item.rect, 9, 9);
-        painter.setPen(QColor(18, 18, 22));
-      } else {
-        if (index == hovered) {
-          painter.setBrush(QColor(255, 255, 255, 28));
-          painter.drawRoundedRect(item.rect, 9, 9);
-        }
-        painter.setPen(QColor(255, 255, 255, index == hovered ? 255 : 190));
-      }
-      painter.drawText(item.rect, Qt::AlignCenter, selectTabLabel(item.tab));
-    }
-  }
+  paintSelectTabs(painter);
   drawHotkeyLegend(painter, rect(), cursor_,
                    {{QStringLiteral("Drag"), QStringLiteral("Area")},
                     {QStringLiteral("Space"), QStringLiteral("Window")},
@@ -5124,6 +5227,21 @@ void CaptureEditor::paintEdit(QPainter &painter) {
                        QString::fromLatin1(
                            kTextSizeNames.at(static_cast<std::size_t>(index))));
     }
+  }
+  paintSelectTabs(painter);
+  if (const QRectF pill = scrollPillRect(); !pill.isNull()) {
+    // A way into scroll capture from a region already drawn: the scroll
+    // overlay opens with this frame in place.
+    const bool hot = pill.contains(cursor_);
+    QFont pillFont(QStringLiteral("Noto Sans"));
+    pillFont.setPixelSize(11);
+    pillFont.setBold(true);
+    painter.setFont(pillFont);
+    painter.setPen(QPen(QColor(255, 255, 255, hot ? 90 : 40), 1));
+    painter.setBrush(hot ? QColor(30, 32, 38, 240) : QColor(18, 18, 22, 220));
+    painter.drawRoundedRect(pill, 11, 11);
+    painter.setPen(QColor(255, 255, 255, hot ? 255 : 200));
+    painter.drawText(pill, Qt::AlignCenter, QStringLiteral("SCROLL CAPTURE"));
   }
   drawStatusPill(painter, rect(), status_);
   QVector<QPointF> keepVisible;

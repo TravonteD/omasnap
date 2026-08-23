@@ -4803,11 +4803,34 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Fullscreen tab did not select the whole monitor");
     return false;
   }
-  if (!editor.selectTabRectForTest(QStringLiteral("REGION")).isNull()) {
-    error = QStringLiteral("Tabs are still offered in the edit phase");
+  // The strip stays in the edit phase as the way back; a tab there drops the
+  // edit and returns to the select phase in that mode.
+  if (!click(QStringLiteral("WINDOW")) || !editor.selectingForTest() ||
+      !editor.windowModeForTest()) {
+    error = QStringLiteral("Window tab from the editor did not return to "
+                           "window selection");
+    return false;
+  }
+  if (!click(QStringLiteral("FULLSCREEN")) || editor.selectingForTest())
+    return false;
+  if (!click(QStringLiteral("REGION")) || !editor.selectingForTest() ||
+      editor.windowModeForTest() || editor.annotationCountForTest() != 0) {
+    error = QStringLiteral("Region tab from the editor did not return to a "
+                           "clean region selection");
     return false;
   }
   editor.close();
+
+  // A file has no screen to go back to: no tabs in its editor.
+  CaptureEditor fileEditor(capture, CaptureEditor::CaptureMode::File);
+  fileEditor.resize(800, 600);
+  fileEditor.show();
+  application.processEvents();
+  if (!fileEditor.selectTabRectForTest(QStringLiteral("REGION")).isNull()) {
+    error = QStringLiteral("Tabs are offered when editing a file");
+    return false;
+  }
+  fileEditor.close();
   return true;
 }
 

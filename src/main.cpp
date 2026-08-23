@@ -451,7 +451,8 @@ int main(int argc, char **argv) {
       return 1;
     }
     bool backToArea = false;
-    const QImage stitched = runScrollCapture(probe.monitor, error, &backToArea);
+    const QImage stitched = runScrollCapture(probe.monitor, error, &backToArea,
+                                            editor.scrollRegion());
     if (backToArea) {
       // Handed straight back: the loop puts the area overlay up again, and A
       // and S can keep passing it between them for as long as anyone likes.

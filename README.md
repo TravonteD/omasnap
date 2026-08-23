@@ -291,8 +291,11 @@ Install the corresponding Tesseract language data before adding a language to
 ### Capture selection
 
 Tabs across the top of the overlay switch the capture kind: **Region**,
-**Scrolling Region**, **Window**, **Fullscreen**. The keys below do the same
-without reaching for the pointer.
+**Scrolling Region**, **Window**, **Fullscreen**. They stay up in the editor
+too: a tab there drops the edit and goes back to capturing in that mode, and a
+small **Scroll capture** button under the image opens the scroll overlay with
+the drawn region already in place. The keys below do the same without reaching
+for the pointer.
 
 | Input | Action |
 |---|---|

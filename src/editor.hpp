@@ -228,6 +228,9 @@ public:
   /// the two kinds of capture swap with one key rather than making anyone
   /// close this and launch the other.
   [[nodiscard]] bool switchedToScroll() const { return switchedToScroll_; }
+  /// Region (logical monitor coordinates) to hand to the scroll overlay when
+  /// switchedToScroll() came from an already-drawn region; null otherwise.
+  [[nodiscard]] QRect scrollRegion() const { return scrollRegion_; }
   /// Current status line. Test accessor.
   [[nodiscard]] QString statusForTest() const { return status_; }
   /// Whether the selection chrome is currently stepped back for an adjustment.
@@ -338,6 +341,17 @@ private:
   void activateSelectTab(SelectTab tab);
   void setWindowMode(bool enabled);
   void selectFullscreen();
+  /// Back from the editor to the select phase: the op log is dropped and the
+  /// frozen screen is offered again for a new region or window.
+  void returnToSelect(bool windowMode);
+  void switchToScroll(const QRect &region);
+  /// Whether there is a live screen behind this capture to re-select from
+  /// (not a file, clipboard image or stitched result).
+  [[nodiscard]] bool hasLiveScreen() const;
+  /// Small pill under the image in the edit phase offering scroll capture of
+  /// the drawn region; null when not offered.
+  [[nodiscard]] QRectF scrollPillRect() const;
+  void paintSelectTabs(QPainter &painter);
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
   void enterEdit(QString status);
@@ -402,6 +416,10 @@ private:
   /// not a change of tool.
   Tool toolBeforeEyedropper_ = Tool::Select;
   bool switchedToScroll_ = false;
+  QRect scrollRegion_;
+  CaptureMode captureMode_ = CaptureMode::Region;
+  /// Which tab produced the capture being edited; lit in the edit phase.
+  SelectTab editedKind_ = SelectTab::Region;
   QRectF selection_;
   QPointF dragStart_;
   QRectF originalSelection_;
