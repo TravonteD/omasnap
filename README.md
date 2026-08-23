@@ -325,7 +325,7 @@ without reaching for the pointer.
 | `E` | Ellipse; shares the shape submenu and filled/hollow toggle |
 | `D` | Redact; press again to toggle randomized pixelation or solid redaction |
 | `X` | Cut out a band; drag to preview the crossed-out strip, then release to remove and collapse it |
-| `T` | Neucha text on a cream readability pill; Enter adds a line, clicking away keeps the text; press T again to toggle the pill |
+| `T` | Neucha text on a cream readability pill. Click for a one-line label, or drag a box to give it room for several lines: Enter moves to the next line while there is room and commits on the last one; `Shift+Enter` always adds a line; `Esc` commits too but keeps the label selected, so `Backspace` removes it; clicking away keeps the text; press T again to toggle the pill |
 | `O` | Recognize and copy all text in the current image |
 | `B` | Cycle backdrop |
 | `1`–`8` | Set annotation color; `7` is black and `8` is white |
@@ -336,14 +336,14 @@ without reaching for the pointer.
 | Hold `Shift` while dragging | Make rectangles, ellipses, and spotlights 1:1; snap lines and arrows to 45°; while dragging a selected layer's handle, keep a rectangle, redaction or spotlight's aspect ratio (lines and arrows: 45°) |
 | Hold `Alt` while dragging | Center rectangles, ellipses, and spotlights on the press point; add `Shift` for a centered square/circle |
 | `←` `↑` `→` `↓` | Nudge the selected layer 1 px; hold `Shift` for 10 px (a held key is one undo step). With nothing selected, pan a zoomed capture |
-| Double-click text | Reopen text editing |
+| Double-click text · `Enter` on a selected text | Reopen text editing |
 | `Delete` | Delete selected layer |
 | `Alt+D` | Duplicate selected layer (offset down-left, or away from a nearby edge); the copy becomes the selection |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z`, `Ctrl+Y` | Redo |
 | `Ctrl+C` | Copy PNG only |
 | `Ctrl+S` | Save PNG only |
-| `Enter` | Copy and save |
+| `Enter` | Copy and save (with a text layer selected: edit it) |
 | `P` | Pin the capture on screen and close the editor |
 | `Esc` | Return to Select; press again to close |
 | Right-click | Return to Select; cancel active drawing |

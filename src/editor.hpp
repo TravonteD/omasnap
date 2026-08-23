@@ -329,11 +329,17 @@ private:
                             const QPointF &candidate, const QPointF &fixed,
                             const QPointF &originalMoving) const;
 
-  void acceptText();
+  /// Commits what is in the inline editor. `keepSelected` leaves the text
+  /// layer selected afterwards (Esc), so Backspace or Del can remove it.
+  void acceptText(bool keepSelected = false);
   void applyCustomColor(const QPointF &position);
   void applyEditState(const EditState &state);
   void cancelActiveDragForHistory();
-  void beginText(const QPointF &point, int annotationIndex = -1);
+  /// Opens the inline editor at `point` with room for `lineCapacity` lines:
+  /// Enter moves to the next line while there is room, and commits on the
+  /// last one; Shift+Enter always adds a line's room.
+  void beginText(const QPointF &point, int annotationIndex = -1,
+                 int lineCapacity = 1);
   void chooseWindow(int index);
   /// Capture-kind tabs across the top of the select overlay. Region and
   /// Window are modes (one is always lit); Fullscreen acts at once.
@@ -559,6 +565,8 @@ private:
   /// (the multiline editor stays transparent with its own caret hidden) so the
   /// caret can be shorter than Neucha's tall line box.
   bool textEditPill_ = false;
+  /// How many lines the current text entry has room for (see beginText).
+  int textLineCapacity_ = 1;
   bool textCaretOn_ = true;
   QTimer textCaretTimer_;
   QElapsedTimer nudgeTimer_;

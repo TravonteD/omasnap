@@ -1328,11 +1328,12 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
       textAnnotation({125, 280}, QStringLiteral("Clicked\naway"));
   QWidget *inlineEditor = QApplication::focusWidget();
   QTest::keyClicks(inlineEditor, QStringLiteral("Clicked"));
-  QTest::keyClick(inlineEditor, Qt::Key_Return);
+  QTest::keyClick(inlineEditor, Qt::Key_Return, Qt::ShiftModifier);
   application.processEvents();
   if (QApplication::focusWidget() != inlineEditor ||
       editor.annotationCountForTest() != 0) {
-    error = QStringLiteral("Enter committed text instead of starting a new line");
+    error = QStringLiteral(
+        "Shift+Enter committed text instead of starting a new line");
     return false;
   }
   const auto *multilineEditor = qobject_cast<QPlainTextEdit *>(inlineEditor);
@@ -1364,6 +1365,129 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
                                      BackgroundStyle::None)) ||
       editor.cursor().shape() != Qt::CrossCursor) {
     error = QStringLiteral("Clicking the toolbar discarded in-progress text");
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
+/**
+ * Enter commits a one-line label, reopens a selected one, and walks the lines
+ * of a dragged box before committing on its last; Esc commits but keeps the
+ * label selected so Backspace removes it.
+ */
+bool runTextEnterSemanticsCheck(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(650, 470), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 470));
+  application.processEvents();
+
+  const auto inlineEditor = [] {
+    return qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+  };
+
+  // A click places a one-line label: Enter commits it and the tool stays.
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 220));
+  application.processEvents();
+  if (!inlineEditor()) {
+    error = QStringLiteral("Text click did not open the inline editor");
+    return false;
+  }
+  QTest::keyClicks(inlineEditor(), QStringLiteral("One"));
+  QTest::keyClick(inlineEditor(), Qt::Key_Return);
+  application.processEvents();
+  if (inlineEditor() || editor.annotationCountForTest() != 1 ||
+      editor.armedToolForTest() != CaptureEditor::Tool::Text ||
+      editor.selectedCountForTest() != 0) {
+    error = QStringLiteral("Enter did not commit a one-line label");
+    return false;
+  }
+
+  // Esc commits too, but leaves the label selected so Backspace removes it.
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 320));
+  application.processEvents();
+  if (!inlineEditor()) {
+    error = QStringLiteral("Second text click did not open the inline editor");
+    return false;
+  }
+  QTest::keyClicks(inlineEditor(), QStringLiteral("Stray"));
+  QTest::keyClick(inlineEditor(), Qt::Key_Escape);
+  application.processEvents();
+  if (inlineEditor() || editor.annotationCountForTest() != 2 ||
+      editor.selectedCountForTest() != 1 ||
+      editor.armedToolForTest() != CaptureEditor::Tool::Select) {
+    error = QStringLiteral("Esc did not commit the label and keep it selected");
+    return false;
+  }
+  // Enter on the selected label reopens it rather than finishing the capture.
+  QTest::keyClick(&editor, Qt::Key_Return);
+  application.processEvents();
+  if (!inlineEditor() ||
+      inlineEditor()->toPlainText() != QStringLiteral("Stray")) {
+    error = QStringLiteral("Enter on a selected label did not reopen it");
+    return false;
+  }
+  QTest::keyClick(inlineEditor(), Qt::Key_Escape);
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_Backspace);
+  application.processEvents();
+  if (editor.annotationCountForTest() != 1 ||
+      editor.selectedCountForTest() != 0) {
+    error = QStringLiteral("Backspace did not remove the Esc-kept label");
+    return false;
+  }
+
+  // A dragged box holds as many lines as fit: Enter walks them and commits
+  // on the last; Shift+Enter adds one more.
+  const qreal lineHeight = QFontMetricsF(annotationTextFont(5.0)).lineSpacing();
+  const int boxHeight = qRound(lineHeight * 3 + 2);
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 250));
+  QTest::mouseMove(&editor, QPoint(400, 250 + boxHeight), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(400, 250 + boxHeight));
+  application.processEvents();
+  if (!inlineEditor()) {
+    error = QStringLiteral("Text drag did not open the inline editor");
+    return false;
+  }
+  QTest::keyClicks(inlineEditor(), QStringLiteral("a"));
+  QTest::keyClick(inlineEditor(), Qt::Key_Return);
+  QTest::keyClicks(inlineEditor(), QStringLiteral("b"));
+  QTest::keyClick(inlineEditor(), Qt::Key_Return);
+  application.processEvents();
+  if (!inlineEditor() ||
+      inlineEditor()->toPlainText() != QStringLiteral("a\nb\n")) {
+    error = QStringLiteral("Enter did not walk the lines of a dragged text box");
+    return false;
+  }
+  QTest::keyClicks(inlineEditor(), QStringLiteral("c"));
+  QTest::keyClick(inlineEditor(), Qt::Key_Return, Qt::ShiftModifier);
+  QTest::keyClicks(inlineEditor(), QStringLiteral("d"));
+  application.processEvents();
+  if (!inlineEditor() ||
+      inlineEditor()->toPlainText() != QStringLiteral("a\nb\nc\nd")) {
+    error = QStringLiteral("Shift+Enter did not add a line past the box");
+    return false;
+  }
+  QTest::keyClick(inlineEditor(), Qt::Key_Return);
+  application.processEvents();
+  if (inlineEditor() || editor.annotationCountForTest() != 2) {
+    error = QStringLiteral("Enter on the last line did not commit the box");
     return false;
   }
   editor.close();
@@ -5301,6 +5425,10 @@ int main(int argc, char **argv) {
   if (!runTextClickAwayCommitCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 87;
+  }
+  if (!runTextEnterSemanticsCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 121;
   }
   if (!runAnnotationLayerChecks(application, snapshotError)) {
     qWarning().noquote() << snapshotError;

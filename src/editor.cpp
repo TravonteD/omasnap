@@ -804,13 +804,31 @@ CaptureEditor::~CaptureEditor() {
 bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
   if (watched == textEditor_ && event->type() == QEvent::KeyPress) {
     auto *key = static_cast<QKeyEvent *>(event);
-    if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
-        key->modifiers().testFlag(Qt::ControlModifier)) {
+    if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+      if (key->modifiers().testFlag(Qt::ControlModifier)) {
+        acceptText();
+        return true;
+      }
+      const int lineCount =
+          std::max(1, static_cast<int>(textEditor_->document()->blockCount()));
+      if (key->modifiers().testFlag(Qt::ShiftModifier)) {
+        // Shift+Enter always makes room for one more line.
+        textLineCapacity_ = std::max(textLineCapacity_, lineCount) + 1;
+        textEditor_->insertPlainText(QStringLiteral("\n"));
+        return true;
+      }
+      // Plain Enter fills the box line by line and commits on the last one.
+      if (lineCount < textLineCapacity_) {
+        textEditor_->insertPlainText(QStringLiteral("\n"));
+        return true;
+      }
       acceptText();
       return true;
     }
     if (key->key() == Qt::Key_Escape) {
-      handleEscape();
+      // Esc keeps what was typed, but leaves the layer selected so a stray
+      // entry is one Backspace away from gone.
+      acceptText(true);
       return true;
     }
   } else if (watched == textEditor_ && event->type() == QEvent::FocusOut) {
@@ -2500,7 +2518,8 @@ void CaptureEditor::chooseWindow(int index) {
       "crop"));
 }
 
-void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
+void CaptureEditor::beginText(const QPointF &point, int annotationIndex,
+                              int lineCapacity) {
   editingAnnotation_ = annotationIndex;
   QString existingText;
   if (annotationIndex >= 0 && annotationIndex < annotations_.size()) {
@@ -2511,6 +2530,10 @@ void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
         annotation.start -
         QPointF(0, QFontMetricsF(annotationTextFont(textSize_)).ascent());
     existingText = annotation.text;
+    // An existing label has room for the lines it already has: Enter on its
+    // last line commits, Shift+Enter adds one.
+    lineCapacity = std::max(lineCapacity,
+                            static_cast<int>(existingText.count('\n')) + 1);
   } else {
     textPoint_ = point;
     textColor_ = annotationColor();
@@ -2525,6 +2548,7 @@ void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
       std::max(12, qRound(displayFont.pixelSize() * scale)));
   const QFontMetrics metrics(displayFont);
   textEditor_->setFont(displayFont);
+  textLineCapacity_ = std::max(1, lineCapacity);
   // While typing, show the same cream pill the committed text will have.
   const TextBackground background =
       annotationIndex >= 0 && annotationIndex < annotations_.size()
@@ -2552,7 +2576,7 @@ void CaptureEditor::beginText(const QPointF &point, int annotationIndex) {
   textCaretTimer_.start();
 }
 
-void CaptureEditor::acceptText() {
+void CaptureEditor::acceptText(bool keepSelected) {
   const QString text = textEditor_->toPlainText().trimmed();
   if (!text.isEmpty()) {
     Annotation annotation;
@@ -2571,15 +2595,26 @@ void CaptureEditor::acceptText() {
       annotation.id = annotations_.at(editingAnnotation_).id;
       annotations_[editingAnnotation_] = annotation;
       selectedAnnotation_ = editingAnnotation_;
+      selectedAnnotations_ = {editingAnnotation_};
       tool_ = Tool::Select;
-      setStatus(QStringLiteral("Text updated · drag to move · handle resizes"));
+      setStatus(QStringLiteral(
+          "Text updated · Enter edits again · drag to move · handle resizes"));
       commitPatch({editingAnnotation_});
     } else {
       selectedAnnotation_ = -1;
-      setStatus(QStringLiteral("Text added · Esc for select mode"));
+      selectedAnnotations_.clear();
+      setStatus(keepSelected
+                    ? QStringLiteral(
+                          "Text added · Backspace removes · Enter edits")
+                    : QStringLiteral("Text added · Esc for select mode"));
       commitAnnotate(std::move(annotation));
+      if (keepSelected && !annotations_.isEmpty()) {
+        selectedAnnotation_ = annotations_.size() - 1;
+        selectedAnnotations_ = {selectedAnnotation_};
+        tool_ = Tool::Select;
+      }
     }
-  } else if (editingAnnotation_ >= 0) {
+  } else if (editingAnnotation_ >= 0 || keepSelected) {
     tool_ = Tool::Select;
   }
   editingAnnotation_ = -1;
@@ -3127,6 +3162,17 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     finish(OutputMode::Save);
     return;
   } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+    // Enter on a selected label reopens it for editing; anywhere else it
+    // finishes the capture.
+    if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
+        selectedAnnotations_.size() <= 1 &&
+        annotations_.at(selectedAnnotation_).kind == Annotation::Kind::Text &&
+        !dragging_ && !textEditor_->isVisible()) {
+      tool_ = Tool::Select;
+      beginText({}, selectedAnnotation_);
+      update();
+      return;
+    }
     finish(OutputMode::Both);
     return;
   } else if (event->key() == Qt::Key_D &&
@@ -3912,7 +3958,11 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     commitAnnotate(std::move(annotation));
     updatePointerCursor();
   } else if (tool_ == Tool::Text) {
-    beginText(point);
+    // A click places a one-line label; a drag draws a box whose height says
+    // how many lines Enter may fill before it commits (see mouseReleaseEvent).
+    dragStart_ = point;
+    dragging_ = true;
+    interaction_ = Interaction::None;
   } else if (tool_ == Tool::Cut) {
     // Activation waits for a dominant drag axis (see mouseMoveEvent); a
     // plain click never crosses that threshold and mouseReleaseEvent treats
@@ -4106,6 +4156,22 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     freehandPoints_.clear();
     dragging_ = false;
     updatePointerCursor();
+    update();
+    return;
+  }
+  if (tool_ == Tool::Text) {
+    dragging_ = false;
+    const QRectF box = QRectF(dragStart_, end).normalized();
+    if (QLineF(dragStart_, end).length() <= 4) {
+      beginText(dragStart_);
+    } else {
+      const qreal size = kTextSizes.at(static_cast<std::size_t>(textSizeIndex_));
+      const qreal lineHeight =
+          QFontMetricsF(annotationTextFont(size)).lineSpacing();
+      const int lines = std::max(
+          1, static_cast<int>(std::floor(box.height() / lineHeight + 0.25)));
+      beginText(box.topLeft(), -1, lines);
+    }
     update();
     return;
   }
@@ -4871,6 +4937,10 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         preview.kind = Annotation::Kind::Spotlight;
         preview.magnification = spotlightMagnification_;
         preview.spotlightShape = spotlightShape_;
+      } else if (tool_ == Tool::Text) {
+        // The box being dragged: its height is how many lines it will hold.
+        preview.kind = Annotation::Kind::Rectangle;
+        preview.cornerRadius = 2.0;
       } else {
         preview.kind = dragShapeKind(tool_);
         if (tool_ == Tool::Rectangle || tool_ == Tool::Ellipse)
@@ -4883,7 +4953,10 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       preview.end = span.p2();
     }
     preview.color = tool_ == Tool::Ocr ? QColor(Qt::white) : annotationColor();
+    if (tool_ == Tool::Text)
+      preview.color.setAlpha(150);
     preview.size = tool_ == Tool::Ocr          ? 2.0
+                   : tool_ == Tool::Text      ? 1.0
                    : tool_ == Tool::Spotlight ? spotlightBorder_
                                               : annotationSize_;
     defaultAnnotations.push_back(std::move(preview));
