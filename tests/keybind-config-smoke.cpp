@@ -63,13 +63,14 @@ bool runKeybindConfigSmoke(QString &error) {
     return false;
   }
   const KeybindConfig loaded = loadKeybindConfig(full);
-  const std::vector<QKeySequence> expectedArrow = {QKeySequence(
-      QStringLiteral("W"))};
+  const std::vector<QKeySequence> expectedArrow = {
+      QKeySequence(QStringLiteral("W"))};
   const std::vector<QKeySequence> expectedMarker = {
       QKeySequence(QStringLiteral("N")), QKeySequence(QStringLiteral("M"))};
   if (loaded.bindings.at(KeyAction::Arrow) != expectedArrow ||
       loaded.bindings.at(KeyAction::Marker) != expectedMarker ||
-      loaded.bindings.at(KeyAction::Redo) != defaults.bindings.at(KeyAction::Redo) ||
+      loaded.bindings.at(KeyAction::Redo) !=
+          defaults.bindings.at(KeyAction::Redo) ||
       primaryKeyHint(loaded, KeyAction::Arrow) != QStringLiteral("W")) {
     error = QStringLiteral("full keybind config not applied");
     return false;
@@ -83,8 +84,8 @@ bool runKeybindConfigSmoke(QString &error) {
     error = QStringLiteral("could not write invalid config");
     return false;
   }
-  qInstallMessageHandler([](QtMsgType, const QMessageLogContext &,
-                            const QString &) {});
+  qInstallMessageHandler(
+      [](QtMsgType, const QMessageLogContext &, const QString &) {});
   const KeybindConfig rejected = loadKeybindConfig(invalid);
   qInstallMessageHandler(nullptr);
   if (rejected.bindings != defaults.bindings) {
@@ -100,8 +101,8 @@ bool runKeybindConfigSmoke(QString &error) {
     error = QStringLiteral("could not write conflicting config");
     return false;
   }
-  qInstallMessageHandler([](QtMsgType, const QMessageLogContext &,
-                            const QString &) {});
+  qInstallMessageHandler(
+      [](QtMsgType, const QMessageLogContext &, const QString &) {});
   const KeybindConfig conflicted = loadKeybindConfig(conflict);
   qInstallMessageHandler(nullptr);
   if (conflicted.bindings != defaults.bindings) {

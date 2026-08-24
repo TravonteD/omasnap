@@ -7,24 +7,42 @@
 
 namespace {
 constexpr std::array kAllKeyActions = {
-    KeyAction::Select,      KeyAction::Arrow,
-    KeyAction::Line,        KeyAction::Freehand,
-    KeyAction::Highlighter, KeyAction::Marker,
-    KeyAction::Rectangle,   KeyAction::Ellipse,
-    KeyAction::Spotlight,   KeyAction::Redact,
-    KeyAction::Cut,         KeyAction::Text,
-    KeyAction::Eyedropper,  KeyAction::Ocr,
-    KeyAction::Pin,         KeyAction::Backdrop,
-    KeyAction::DuplicateLayer,               KeyAction::RestoreLastRegion,
-    KeyAction::ToggleScrollMode,             KeyAction::CycleSelectTab,
-    KeyAction::Color1,      KeyAction::Color2,
-    KeyAction::Color3,      KeyAction::Color4,
-    KeyAction::Color5,      KeyAction::Color6,
-    KeyAction::Color7,      KeyAction::Color8,
-    KeyAction::Undo,        KeyAction::Redo,
-    KeyAction::Copy,        KeyAction::Save,
-    KeyAction::SelectAll,   KeyAction::ZoomIn,
-    KeyAction::ZoomOut,     KeyAction::ZoomFit,
+    KeyAction::Select,
+    KeyAction::Arrow,
+    KeyAction::Line,
+    KeyAction::Freehand,
+    KeyAction::Highlighter,
+    KeyAction::Marker,
+    KeyAction::Rectangle,
+    KeyAction::Ellipse,
+    KeyAction::Spotlight,
+    KeyAction::Redact,
+    KeyAction::Cut,
+    KeyAction::Text,
+    KeyAction::Eyedropper,
+    KeyAction::Ocr,
+    KeyAction::Pin,
+    KeyAction::Backdrop,
+    KeyAction::DuplicateLayer,
+    KeyAction::RestoreLastRegion,
+    KeyAction::ToggleScrollMode,
+    KeyAction::CycleSelectTab,
+    KeyAction::Color1,
+    KeyAction::Color2,
+    KeyAction::Color3,
+    KeyAction::Color4,
+    KeyAction::Color5,
+    KeyAction::Color6,
+    KeyAction::Color7,
+    KeyAction::Color8,
+    KeyAction::Undo,
+    KeyAction::Redo,
+    KeyAction::Copy,
+    KeyAction::Save,
+    KeyAction::SelectAll,
+    KeyAction::ZoomIn,
+    KeyAction::ZoomOut,
+    KeyAction::ZoomFit,
 
 };
 } // namespace
@@ -185,11 +203,9 @@ KeybindConfig loadKeybindConfig(const QString &filePath) {
   bool ok = true;
   std::map<KeyAction, std::vector<QKeySequence>> parsed;
   for (const QString &child : childKeys) {
-    const auto action =
-        std::find_if(kAllKeyActions.begin(), kAllKeyActions.end(),
-                     [&](KeyAction candidate) {
-                       return keyActionName(candidate) == child;
-                     });
+    const auto action = std::find_if(
+        kAllKeyActions.begin(), kAllKeyActions.end(),
+        [&](KeyAction candidate) { return keyActionName(candidate) == child; });
     if (action == kAllKeyActions.end())
       continue; // Unknown names are ignored, like unknown keys elsewhere.
     std::vector<QKeySequence> sequences;
@@ -226,8 +242,8 @@ KeybindConfig loadKeybindConfig(const QString &filePath) {
         if (keyActionScope(it->first) != keyActionScope(other->first))
           continue;
         for (const QKeySequence &sequence : it->second) {
-          if (std::find(other->second.begin(), other->second.end(),
-                        sequence) != other->second.end()) {
+          if (std::find(other->second.begin(), other->second.end(), sequence) !=
+              other->second.end()) {
             offender = sequence.toString();
             ok = false;
             break;
