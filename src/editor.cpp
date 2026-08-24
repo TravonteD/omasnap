@@ -4677,8 +4677,11 @@ void CaptureEditor::startScrollCapture(const QRect &region) {
 void CaptureEditor::endScrollCapture() {
   if (!scrollPanel_)
     return;
-  // Deleting restores the surface's mask and keyboard grab.
-  delete scrollPanel_;
+  // This runs from the panel's own signals (emitted inside its event
+  // handlers), so the surface is handed back now but the object goes once
+  // the stack has unwound.
+  scrollPanel_->release();
+  scrollPanel_->deleteLater();
   scrollPanel_ = nullptr;
   setFocus(Qt::OtherFocusReason);
   updatePointerCursor();
@@ -4686,6 +4689,9 @@ void CaptureEditor::endScrollCapture() {
 }
 
 void CaptureEditor::adoptStitched(const QImage &image) {
+  qInfo().noquote() << QStringLiteral("scroll: editing stitched %1x%2")
+                           .arg(image.width())
+                           .arg(image.height());
   if (image.isNull()) {
     setScrollMode(true);
     return;
