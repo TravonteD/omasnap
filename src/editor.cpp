@@ -1815,6 +1815,12 @@ CaptureEditor::toUnclampedAnnotationPoint(const QPointF &position) const {
           (position.y() - image.top()) / scale};
 }
 
+QPointF CaptureEditor::markerPlacementPoint(const QPointF &position) const {
+  constexpr qreal kPointerLead = 9.0;
+  const qreal lead = kPointerLead / std::max<qreal>(editScale(), 0.001);
+  return toAnnotationPoint(position) - QPointF(lead, lead);
+}
+
 bool CaptureEditor::selectedLayerAcceptsPoint(const QPointF &point) const {
   if (selectedAnnotation_ < 0 || selectedAnnotation_ >= annotations_.size())
     return false;
@@ -4150,7 +4156,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   if (tool_ == Tool::Marker) {
     Annotation annotation;
     annotation.kind = Annotation::Kind::Marker;
-    annotation.start = point;
+    annotation.start = markerPlacementPoint(cursor_);
     annotation.number = nextMarker_;
     annotation.color = annotationColor();
     annotation.size = annotationSize_;
@@ -5522,7 +5528,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     // press moves that counter instead.
     Annotation preview;
     preview.kind = Annotation::Kind::Marker;
-    preview.start = toAnnotationPoint(cursor_);
+    preview.start = markerPlacementPoint(cursor_);
     preview.number = nextMarker_;
     preview.color = annotationColor();
     preview.color.setAlpha(185);
