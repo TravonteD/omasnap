@@ -9,6 +9,7 @@
 #include "editor.hpp"
 #include "recent-snaps.hpp"
 #include "instance-lock-smoke.hpp"
+#include "keybind-config-smoke.hpp"
 #include "palette-config-smoke.hpp"
 #include "pin-layout-smoke.hpp"
 #include "stitch-smoke.hpp"
@@ -8879,6 +8880,12 @@ int main(int argc, char **argv) {
   QString paletteError;
   if (!runPaletteConfigSmoke(paletteError)) {
     qWarning().noquote() << "palette config smoke failed:" << paletteError;
+    return EXIT_FAILURE;
+  }
+
+  QString keybindError;
+  if (!runKeybindConfigSmoke(keybindError)) {
+    qWarning().noquote() << "keybind config smoke failed:" << keybindError;
     return EXIT_FAILURE;
   }
 
