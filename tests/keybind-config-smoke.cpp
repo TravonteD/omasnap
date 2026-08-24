@@ -123,6 +123,26 @@ bool runKeybindConfigSmoke(QString &error) {
     return false;
   }
 
+  // A listed action with no keys unbinds it; absent ones keep defaults.
+  const QString unbind = dir.filePath(QStringLiteral("unbind.conf"));
+  if (!writeFile(unbind, "[keys]\n"
+                         "marker=\n"
+                         "redo = \n")) {
+    error = QStringLiteral("could not write unbind config");
+    return false;
+  }
+  const KeybindConfig unbound = loadKeybindConfig(unbind);
+  if (!unbound.bindings.at(KeyAction::Marker).empty() ||
+      !unbound.bindings.at(KeyAction::Redo).empty()) {
+    error = QStringLiteral("empty values did not unbind the action");
+    return false;
+  }
+  if (unbound.bindings.at(KeyAction::Arrow) !=
+      defaults.bindings.at(KeyAction::Arrow)) {
+    error = QStringLiteral("unbinding one action disturbed another");
+    return false;
+  }
+
   // Cross-scope reuse stays legal: R and S mean different things per phase.
   const QString scopes = dir.filePath(QStringLiteral("scopes.conf"));
   if (!writeFile(scopes, "[keys]\nrectangle=R\nrestore-region=R\n")) {

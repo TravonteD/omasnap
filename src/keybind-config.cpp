@@ -213,8 +213,9 @@ KeybindConfig loadKeybindConfig(const QString &filePath) {
     }
     if (!ok)
       break;
-    if (!sequences.empty())
-      parsed.emplace(*action, std::move(sequences));
+    // A listed action with no keys (e.g. "marker =") unbinds it; an absent
+    // one keeps its defaults.
+    parsed.emplace(*action, std::move(sequences));
   }
 
   if (ok) {

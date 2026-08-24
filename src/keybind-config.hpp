@@ -63,9 +63,10 @@ struct KeybindConfig {
 
 /** Reads [keys]: `name=key[,key...]` with portable QKeySequence names
  *  (`arrow=A`, `redo=Ctrl+Shift+Z,Ctrl+Y`). A missing file or section leaves
- *  defaults untouched. Any unparsable key, or one bound to two actions of the
- *  same scope, rejects the whole section: defaults come back and a warning
- *  names the offender. Unknown action names are ignored. */
+ *  defaults untouched. A listed action with no keys ("marker =") unbinds it.
+ *  Any unparsable key, or one bound to two actions of the same scope, rejects
+ *  the whole section: defaults come back and a warning names the offender.
+ *  Unknown action names are ignored. */
 [[nodiscard]] KeybindConfig loadKeybindConfig(const QString &filePath);
 
 /** INI key for `action`, e.g. "restore-region". */

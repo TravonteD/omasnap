@@ -303,11 +303,13 @@ redo = Ctrl+Shift+Z, Ctrl+Y
 ```
 
 Every key is optional — an action missing from `[keys]` keeps its default
-(the keys shown in [Controls](#controls)). If any value fails to parse, or a
-key ends up bound to two actions of the same phase (editing vs selecting), the
-whole `[keys]` section is ignored and a warning names the offender; the same
-key may still mean different things per phase, like `R` restoring the last
-region while selecting and drawing rectangles while editing.
+(the keys shown in [Controls](#controls)). Setting an action to an empty
+value unbinds it entirely (`marker =` disables the marker keys); its hints
+then show no key. If any value fails to parse, or a key ends up bound to two
+actions of the same phase (editing vs selecting), the whole `[keys]` section
+is ignored and a warning names the offender; the same key may still mean
+different things per phase, like `R` restoring the last region while
+selecting and drawing rectangles while editing.
 
 Bindable actions and their defaults:
 
