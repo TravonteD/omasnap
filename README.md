@@ -294,8 +294,8 @@ image = ~/Pictures/backdrops/desk.jpg
 default = custom
 
 [keys]
-# Editor keybindings. Each action takes one key or a comma-separated list
-# (any entry fires the action); the first entry is the one shown in hints.
+# Each action takes one key or a comma-separated list (any entry fires the action);
+# the first entry is the one shown in hints.
 # Values use Qt names: letters and digits as-is, modifiers joined with +,
 # e.g. Ctrl+Z, Alt+D, Space, F5.
 arrow = W
