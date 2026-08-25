@@ -1011,6 +1011,9 @@ void ScrollCapturePanel::paintEvent(QPaintEvent *) {
     painter.fillRect(rect(), kDim);
     painter.fillRect(region_, Qt::transparent);
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    // Drawn first, low-opacity, no card: the live page, the region outline,
+    // the pills and the tab strip all paint over it wherever they overlap.
+    drawHotkeyLegend(painter, rect(), legendEntries());
     painter.setPen(QPen(statusWarning_ ? kWarn : kAccent, 2));
     painter.setBrush(Qt::NoBrush);
     // Fully outside the region so no overlay pixel lands in the capture.
@@ -1099,7 +1102,6 @@ void ScrollCapturePanel::paintEvent(QPaintEvent *) {
   // tabs leave for the area overlay in that mode.
   drawCaptureTabs(painter, captureTabLayout(rect()), CaptureKind::Scroll,
                   cursor_);
-  drawHotkeyLegend(painter, rect(), cursor_, legendEntries());
   drawStatusPill(painter, rect(), status_);
 }
 

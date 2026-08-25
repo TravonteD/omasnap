@@ -285,6 +285,20 @@ public:
   [[nodiscard]] bool shapeMenuOpenForTest() const { return shapeMenuOpen_; }
   /// Whether window selection is active in the select phase. Test accessor.
   [[nodiscard]] bool windowModeForTest() const { return windowMode_; }
+  /// Where the image is drawn on screen right now (widget pixels), and the
+  /// annotation-space-to-widget scale. Test accessor: lets a test compute
+  /// exact click/expectation points from real geometry instead of hand math.
+  [[nodiscard]] QRectF editImageRectForTest() const { return editImageRect(); }
+  [[nodiscard]] qreal editScaleForTest() const { return editScale(); }
+  /// Center of the toolbar button whose action is `action` (e.g.
+  /// "tool-arrow"), or (-1,-1) if not found. Test accessor: a click position
+  /// that survives the toolbar's own layout changing.
+  [[nodiscard]] QPoint toolbarButtonCenterForTest(const QString &action) const {
+    for (const ToolbarButton &button : toolbarButtons())
+      if (button.action == action)
+        return button.rect.center().toPoint();
+    return {-1, -1};
+  }
   /// Whether the overlay is still in the select phase. Test accessor.
   [[nodiscard]] bool selectingForTest() const { return phase_ == Phase::Select; }
   /// Widget rect of the capture-kind tab with `label`, or null. Test accessor.
@@ -327,9 +341,12 @@ private:
   [[nodiscard]] int cropHandleAt(const QPointF &point) const;
   /// Fit-to-window rect for the selection (unaffected by the view zoom/pan).
   [[nodiscard]] QRectF baseImageRect() const;
-  /// Top edge the chrome (toolbar, popovers) anchors above: the fit rect at
-  /// zoom 1, the viewport band once zoomed (the content fills it then).
-  [[nodiscard]] qreal chromeAnchorTop() const;
+  /// Top of the toolbar row: just under the tab strip's fixed bottom edge,
+  /// independent of the image, so the two can never overlap.
+  [[nodiscard]] qreal toolbarTop() const;
+  /// How much vertical room the tab strip and toolbar actually need, at the
+  /// current window width — the image's top margin, not a guessed constant.
+  [[nodiscard]] qreal imageTopMargin() const;
   /// baseImageRect transformed by the current view zoom and pan (content and
   /// annotations map through this). Equals baseImageRect at zoom 1.
   [[nodiscard]] QRectF editImageRect() const;
