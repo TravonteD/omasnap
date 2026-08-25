@@ -107,6 +107,8 @@ qt_add_executable(omasnap-smoke
   tests/transform-smoke.hpp
   tests/cut-smoke.cpp
   tests/cut-smoke.hpp
+  tests/cut-mapping-smoke.cpp
+  tests/cut-mapping-smoke.hpp
   tests/palette-config-smoke.cpp
   tests/palette-config-smoke.hpp
   src/cli-path.cpp
