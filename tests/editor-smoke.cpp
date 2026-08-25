@@ -2596,7 +2596,7 @@ bool runRecentsShelfSmoke(QApplication &application, QString &error) {
     }
     QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
                       fanned.center().toPoint());
-    application.processEvents();
+    editor.waitForReopen();
     // Reopened in place: same surface, same picture, layer still undoable.
     if (editor.selectingForTest() || !editor.isVisible() ||
         editor.annotationCountForTest() != 1 ||
