@@ -311,8 +311,7 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("one")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -333,8 +332,7 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("rotated")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
     QTest::mouseMove(&editor, QPoint(320, 180), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -391,8 +389,7 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("hidpi")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -446,13 +443,13 @@ bool runMeasurementReadoutCheck(QString &error) {
   if (!expect(QStringLiteral("300, 240"), QStringLiteral("Idle pointer")))
     return false;
 
-  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
   QTest::mouseMove(&editor, QPoint(200, 150), 20);
   QApplication::processEvents();
   if (!expect(QStringLiteral("600 × 440"), QStringLiteral("Hovered window")))
     return false;
-  QTest::keyClick(&editor, Qt::Key_Space);
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Scroll
+  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Region
   QApplication::processEvents();
 
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 120));
@@ -5479,13 +5476,18 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
                              "selecting a scrolling region");
       return false;
     }
-    // Space walks Region -> Scroll -> Window -> Region.
+    // Space walks Region -> Window -> Scroll -> Region. Starting in scroll,
+    // the next step is Region (Fullscreen is skipped).
     QTest::keyClick(&scrollEditor, Qt::Key_Space);
-    if (!scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
-      error = QStringLiteral("Space from scroll mode did not step to window");
+    if (scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Space from scroll mode did not step to region");
       return false;
     }
     QTest::keyClick(&scrollEditor, Qt::Key_Space);
+    if (!scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Space from region did not step to window");
+      return false;
+    }
     QTest::keyClick(&scrollEditor, Qt::Key_Space);
     if (!scrollEditor.scrollModeForTest()) {
       error = QStringLiteral("Space did not cycle back round to scroll mode");
@@ -6275,12 +6277,14 @@ int main(int argc, char **argv) {
     QTest::mouseMove(&quickEditor, QPoint(650, 470), 20);
     QTest::mouseRelease(&quickEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(650, 470));
+    if (!quickEditor.exportingForTest() || quickEditor.editingForTest())
+      return 74;
     quickEditor.waitForExport();
     const QStringList files =
         QDir(savedRoot).entryList({QStringLiteral("*.png")}, QDir::Files);
     if (quickEditor.isVisible() || files.size() != 1 ||
         QImage(QDir(savedRoot).filePath(files.constFirst())).isNull())
-      return 74;
+      return 75;
   }
   QDir(savedRoot).removeRecursively();
 
@@ -6316,8 +6320,7 @@ int main(int argc, char **argv) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
   QTest::mouseMove(&editor, QPoint(200, 160), 20);
   application.processEvents();
   const QImage hoverUi = editor.grab().toImage();
@@ -6331,7 +6334,8 @@ int main(int argc, char **argv) {
       keyboardWindowUi.pixelColor(200, 160) ==
           capture.source.pixelColor(200, 160))
     return 8;
-  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Region
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Scroll
+  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Region
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,

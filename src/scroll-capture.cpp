@@ -362,8 +362,8 @@ void ScrollCapturePanel::startCapture(Mode mode, stitch::Axis axis) {
   injectorStop_ = std::make_shared<std::atomic<bool>>(false);
   handshake_ = std::make_shared<stitch::CaptureHandshake>();
   const auto [parkX, parkY] = autoScrollParkPoint();
-  setStatus(QStringLiteral("Auto-scrolling… · move the pointer out of the "
-                           "frame to stop · Done stitches it"));
+  setStatus(QStringLiteral("Auto-scrolling… · keep the pointer still · "
+                           "Done stitches it"));
   // Spawn after this frame's commit so the input-region hole and the released
   // keyboard land before the pointer warp.
   QTimer::singleShot(
@@ -767,8 +767,8 @@ std::pair<int, int> ScrollCapturePanel::autoScrollParkPoint() const {
 void ScrollCapturePanel::continueCapture() {
   // Picks the same capture back up: the session keeps every band it already
   // has, so this carries on from the last one rather than starting a second
-  // capture of the same page. Moving the pointer out is how it stopped, so the
-  // fresh injector parks it back inside the frame.
+  // capture of the same page. The fresh injector parks the pointer back
+  // inside the frame.
   if (phase_ != Phase::Capturing || !worker_ || mode_ != Mode::Auto)
     return;
   autoStalled_ = false;
@@ -783,8 +783,8 @@ void ScrollCapturePanel::continueCapture() {
   injectorStop_ = std::make_shared<std::atomic<bool>>(false);
   handshake_ = std::make_shared<stitch::CaptureHandshake>();
   const auto [parkX, parkY] = autoScrollParkPoint();
-  setStatus(QStringLiteral("Auto-scrolling… · move the pointer out of the "
-                           "frame to stop · Done stitches it"));
+  setStatus(QStringLiteral("Auto-scrolling… · keep the pointer still · "
+                           "Done stitches it"));
   update();
   QString spawnError;
   if (!spawnScrollInjector(injectorStop_, handshake_, parkX, parkY, axis_,

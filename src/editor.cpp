@@ -10,6 +10,7 @@
 #include "palette-config.hpp"
 #include "recent-snaps.hpp"
 #include "scroll-capture.hpp"
+#include "startup-timing.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -525,9 +526,11 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
                              QWidget *parent)
     : QWidget(parent), capture_(std::move(capture)),
       quickOutputMode_(quickOutput) {
+  startupTimingMark("CaptureEditor constructor entered");
   pristineSource_ = capture_.source;
   pristineLogicalSize_ = capture_.previewSize;
   paletteConfig_ = loadPaletteConfig(defaultConfigPath());
+  startupTimingMark("palette config loaded");
   customColor_ = paletteConfig_.custom;
   if (!log.ops.isEmpty()) {
     ops_ = std::move(log.ops);
@@ -552,24 +555,14 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     setGeometry(QGuiApplication::primaryScreen()->geometry());
   cursor_ = mapFromGlobal(QCursor::pos());
 
-  textEditor_ = new InlineTextEdit(this);
-  textEditor_->hide();
-  textEditor_->setViewportMargins(0, 0, 0, 0);
-  textEditor_->setStyleSheet(
-      QStringLiteral("QPlainTextEdit { color: #ff375f; background: transparent; "
-                     "border: none; padding: 0;"
-                     " selection-background-color: #0a84ff; }"));
-  textEditor_->installEventFilter(this);
-  // The editor paints its own, shorter caret (see paintEdit); blink it.
+  // Constructing QPlainTextEdit initializes substantial style/layout state.
+  // Keep it off the launch path; beginText() creates it on first use.
   textCaretTimer_.setInterval(530);
   connect(&textCaretTimer_, &QTimer::timeout, this, [this] {
+    if (!textEditor_)
+      return;
     textCaretOn_ = !textCaretOn_;
     update(textEditor_->geometry().adjusted(-4, -4, 4, 4));
-  });
-  connect(textEditor_, &QPlainTextEdit::cursorPositionChanged, this, [this] {
-    textCaretOn_ = true;
-    textCaretTimer_.start();
-    update();
   });
   // A run of nudges persists once, shortly after the last key, instead of
   // re-rendering the snapshot on every auto-repeat.
@@ -577,35 +570,6 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   nudgePersistTimer_.setInterval(kNudgeCoalesceMs);
   connect(&nudgePersistTimer_, &QTimer::timeout, this,
           [this] { endNudgeRun(); });
-  connect(textEditor_, &QPlainTextEdit::textChanged, this, [this] {
-        const QString text = textEditor_->toPlainText();
-        const QFontMetrics metrics(textEditor_->font());
-        int widestLine = 0;
-        const QStringList lines = text.split('\n');
-        for (const QString &line : lines)
-          widestLine = std::max(widestLine,
-                                metrics.horizontalAdvance(line + QStringLiteral("  ")));
-        const int sidePadding = textEditPill_
-                                    ? qRound(std::max(4.0, metrics.height() * 0.18))
-                                    : 0;
-        const int desiredWidth = std::max(48, widestLine + sidePadding * 2);
-        const int availableWidth =
-            std::max(48, qRound(editImageRect().right() - textEditor_->x()));
-        // QPlainTextEdit needs a little more than QFontMetrics::height(): its
-        // block layout keeps leading/descent outside the nominal line box.
-        // Without that room the first Return scrolls the original line out of
-        // the viewport, making it look as though the text was erased.
-        const int lineCount = std::max(1, static_cast<int>(lines.size()));
-        const int desiredHeight = lineCount * metrics.lineSpacing() +
-                                  metrics.descent() + 4;
-        textEditor_->resize(std::min(desiredWidth, availableWidth),
-                            desiredHeight);
-        textEditor_->verticalScrollBar()->setValue(0);
-        QTimer::singleShot(0, textEditor_, [editor = textEditor_] {
-          editor->verticalScrollBar()->setValue(0);
-        });
-        update();
-      });
 
   ocrAnimTimer_.setInterval(16);
   connect(&ocrAnimTimer_, &QTimer::timeout, this, [this] { update(); });
@@ -690,7 +654,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
             case CaptureMode::Fullscreen:
               selection_ = QRectF(QPointF(), capture_.previewSize);
               editedKind_ = SelectTab::Fullscreen;
-              enterEdit(QStringLiteral(
+              enterSelectedCapture(QStringLiteral(
                   "Full screen selected · native resolution · outer handles "
                   "crop"));
               break;
@@ -759,7 +723,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     const bool veryLong =
         capture_.previewSize.width() > stitch::kWidelyOpenableEdge ||
         capture_.previewSize.height() > stitch::kWidelyOpenableEdge;
-    enterEdit(
+    const QString editStatus =
         veryLong
             ? QStringLiteral("Very long capture (%1 × %2) · edits and saves "
                              "here as usual, but many apps cannot open images "
@@ -769,12 +733,16 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
         : mode == CaptureMode::File
             ? QStringLiteral("Editing image from file · Copy/Save to output")
             : QStringLiteral("Full screen selected · native resolution · "
-                             "outer handles crop"));
+                             "outer handles crop");
+    if (mode == CaptureMode::File)
+      enterEdit(editStatus);
+    else
+      enterSelectedCapture(editStatus);
   } else if (mode == CaptureMode::Window) {
     windowMode_ = true;
     hoveredWindow_ = windowAt(cursor_);
     setStatus(QStringLiteral("Window mode · click or Super+Arrows then Enter · "
-                             "Space returns to area"));
+                             "Space selects a scrolling region"));
   } else if (mode == CaptureMode::Scroll) {
     scrollMode_ = true;
     setStatus(QStringLiteral(
@@ -807,8 +775,11 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
           });
   // The shelf belongs to the select overlay only: a file being edited has no
   // select phase, and quick output never shows one long enough to use it.
-  if (mode != CaptureMode::File && quickOutputMode_ == QuickOutputMode::None)
+  if (mode != CaptureMode::File && quickOutputMode_ == QuickOutputMode::None) {
+    startupTimingMark("recent shelf load dispatch starting");
     loadRecents();
+    startupTimingMark("recent shelf load dispatched");
+  }
   updatePointerCursor();
 }
 
@@ -860,7 +831,7 @@ bool CaptureEditor::eventFilter(QObject *watched, QEvent *event) {
     }
   } else if (watched == textEditor_ && event->type() == QEvent::FocusOut) {
     QTimer::singleShot(0, this, [this] {
-      if (textEditor_->isVisible() && !textEditor_->hasFocus())
+      if (textEditing() && !textEditor_->hasFocus())
         acceptText();
     });
   }
@@ -1360,7 +1331,7 @@ int CaptureEditor::hoveredSpotlightAt(const QPointF &position) const {
   return index;
 }
 void CaptureEditor::duplicateSelectedAnnotation() {
-  if (dragging_ || textEditor_->isVisible() || selectedAnnotation_ < 0 ||
+  if (dragging_ || textEditing() || selectedAnnotation_ < 0 ||
       selectedAnnotation_ >= annotations_.size())
     return;
   endNudgeRun();
@@ -2108,8 +2079,10 @@ void CaptureEditor::applyEditState(const EditState &state) {
   editingAnnotation_ = -1;
   interaction_ = Interaction::None;
   freehandPoints_.clear();
-  textEditor_->clear();
-  textEditor_->hide();
+  if (textEditor_) {
+    textEditor_->clear();
+    textEditor_->hide();
+  }
   textCaretTimer_.stop();
   setFocus(Qt::OtherFocusReason);
   updatePointerCursor();
@@ -2527,20 +2500,38 @@ void CaptureEditor::enterEdit(QString status) {
   viewOffset_ = {};
   setStatus(std::move(status));
   updatePointerCursor();
-  if (quickOutputMode_ != QuickOutputMode::None) {
-    const OutputMode output = quickOutputMode_ == QuickOutputMode::Copy
-                                  ? OutputMode::Copy
-                                  : quickOutputMode_ == QuickOutputMode::Save
-                                        ? OutputMode::Save
-                                        : OutputMode::Both;
-    finish(output);
-    return;
-  }
   const QRectF full(QPointF(), capture_.previewSize);
   if (ops_.isEmpty() && !selection_.isEmpty() && selection_ != full)
     commitCrop(selection_);
   else
     scheduleSnapshot();
+}
+
+void CaptureEditor::enterSelectedCapture(QString editStatus) {
+  if (quickOutputMode_ != QuickOutputMode::None) {
+    enterExport();
+    return;
+  }
+  enterEdit(std::move(editStatus));
+}
+
+void CaptureEditor::enterExport() {
+  if (selection_.isEmpty()) {
+    phase_ = Phase::Select;
+    setStatus(QStringLiteral("Could not output an empty selection"));
+    updatePointerCursor();
+    return;
+  }
+  phase_ = Phase::Export;
+  dragging_ = false;
+  windowMode_ = false;
+  updatePointerCursor();
+  const OutputMode output = quickOutputMode_ == QuickOutputMode::Copy
+                                ? OutputMode::Copy
+                            : quickOutputMode_ == QuickOutputMode::Save
+                                ? OutputMode::Save
+                                : OutputMode::Both;
+  finish(output);
 }
 
 void CaptureEditor::handleEscape() {
@@ -2566,7 +2557,7 @@ void CaptureEditor::handleEscape() {
     selection_ = {};
     setStatus(windowMode_
                   ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                   "Enter · Space returns to area")
+                                   "Enter · Space selects a scrolling region")
                   : QStringLiteral(
                         "Drag to select an area · Space selects a window"));
     updatePointerCursor();
@@ -2580,8 +2571,10 @@ void CaptureEditor::handleEscape() {
     return;
   }
   escapeTimer_.restart();
-  textEditor_->clear();
-  textEditor_->hide();
+  if (textEditor_) {
+    textEditor_->clear();
+    textEditor_->hide();
+  }
   textCaretTimer_.stop();
   editingAnnotation_ = -1;
   if (dragStartStateValid_) {
@@ -2612,13 +2605,59 @@ void CaptureEditor::chooseWindow(int index) {
   redactionBaseStale_ = true;
   windowMode_ = false;
   editedKind_ = SelectTab::Window;
-  enterEdit(QStringLiteral(
+  enterSelectedCapture(QStringLiteral(
       "Window selected · Select moves layers · Ctrl+wheel zooms · outer handles "
       "crop"));
 }
 
+void CaptureEditor::ensureTextEditor() {
+  if (textEditor_)
+    return;
+  textEditor_ = new InlineTextEdit(this);
+  textEditor_->hide();
+  textEditor_->setViewportMargins(0, 0, 0, 0);
+  textEditor_->setStyleSheet(
+      QStringLiteral("QPlainTextEdit { color: #ff375f; background: transparent; "
+                     "border: none; padding: 0;"
+                     " selection-background-color: #0a84ff; }"));
+  textEditor_->installEventFilter(this);
+  connect(textEditor_, &QPlainTextEdit::cursorPositionChanged, this, [this] {
+    textCaretOn_ = true;
+    textCaretTimer_.start();
+    update();
+  });
+  connect(textEditor_, &QPlainTextEdit::textChanged, this, [this] {
+    const QString text = textEditor_->toPlainText();
+    const QFontMetrics metrics(textEditor_->font());
+    int widestLine = 0;
+    const QStringList lines = text.split('\n');
+    for (const QString &line : lines)
+      widestLine = std::max(
+          widestLine, metrics.horizontalAdvance(line + QStringLiteral("  ")));
+    const int sidePadding =
+        textEditPill_ ? qRound(std::max(4.0, metrics.height() * 0.18)) : 0;
+    const int desiredWidth = std::max(48, widestLine + sidePadding * 2);
+    const int availableWidth =
+        std::max(48, qRound(editImageRect().right() - textEditor_->x()));
+    const int lineCount = std::max(1, static_cast<int>(lines.size()));
+    const int desiredHeight =
+        lineCount * metrics.lineSpacing() + metrics.descent() + 4;
+    textEditor_->resize(std::min(desiredWidth, availableWidth), desiredHeight);
+    textEditor_->verticalScrollBar()->setValue(0);
+    QTimer::singleShot(0, textEditor_, [editor = textEditor_] {
+      editor->verticalScrollBar()->setValue(0);
+    });
+    update();
+  });
+}
+
+bool CaptureEditor::textEditing() const {
+  return textEditor_ && textEditor_->isVisible();
+}
+
 void CaptureEditor::beginText(const QPointF &point, int annotationIndex,
                               int lineCapacity) {
+  ensureTextEditor();
   editingAnnotation_ = annotationIndex;
   QString existingText;
   if (annotationIndex >= 0 && annotationIndex < annotations_.size()) {
@@ -2676,6 +2715,8 @@ void CaptureEditor::beginText(const QPointF &point, int annotationIndex,
 }
 
 void CaptureEditor::acceptText(bool keepSelected) {
+  if (!textEditor_)
+    return;
   const QString text = textEditor_->toPlainText().trimmed();
   if (!text.isEmpty()) {
     Annotation annotation;
@@ -2955,7 +2996,12 @@ void CaptureEditor::finish(OutputMode mode) {
 void CaptureEditor::completeFinish(const FinishResult &result) {
   if (!result.error.isEmpty()) {
     busy_ = false;
-    setStatus(result.error);
+    if (phase_ == Phase::Export) {
+      quickOutputMode_ = QuickOutputMode::None;
+      enterEdit(result.error);
+    } else {
+      setStatus(result.error);
+    }
     return;
   }
   if (!snapshotPath_.isEmpty()) {
@@ -3116,6 +3162,10 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     // Esc only puts the card away; it should not also back out of the tool.
     if (key == Qt::Key_Escape)
       return;
+  }
+  if (phase_ == Phase::Export) {
+    event->accept();
+    return;
   }
   const Tool toolBefore = tool_;
   const QString statusBefore = status_;
@@ -3281,7 +3331,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
         selectedAnnotations_.size() <= 1 &&
         annotations_.at(selectedAnnotation_).kind == Annotation::Kind::Text &&
-        !dragging_ && !textEditor_->isVisible()) {
+        !dragging_ && !textEditing()) {
       tool_ = Tool::Select;
       beginText({}, selectedAnnotation_);
       update();
@@ -3303,10 +3353,10 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
                                 Qt::MetaModifier) &&
              selectedAnnotation_ >= 0 &&
              selectedAnnotation_ < annotations_.size() && !dragging_ &&
-             !textEditor_->isVisible()) {
+             !textEditing()) {
     nudgeSelectedAnnotation(nudge);
   } else if (viewZoom_ > 1.0 && selectedAnnotation_ < 0 && !dragging_ &&
-             !textEditor_->isVisible() &&
+             !textEditing() &&
              !event->modifiers().testAnyFlags(Qt::ControlModifier |
                                               Qt::AltModifier |
                                               Qt::MetaModifier) &&
@@ -3477,6 +3527,8 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
     return;
   }
   cursor_ = event->position();
+  if (phase_ == Phase::Export)
+    return;
   if (capturePending_)
     return;
   if (phase_ == Phase::Select) {
@@ -3768,7 +3820,7 @@ void CaptureEditor::mouseDoubleClickEvent(QMouseEvent *event) {
 }
 
 void CaptureEditor::mousePressEvent(QMouseEvent *event) {
-  if (busy_ || capturePending_)
+  if (phase_ == Phase::Export || busy_ || capturePending_)
     return;
   if (!ocrResultText_.isEmpty())
     dismissOcrOverlay();
@@ -3780,7 +3832,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
         update();
       }
     } else if (phase_ == Phase::Edit) {
-      if (textEditor_->isVisible())
+      if (textEditing())
         acceptText();
       if (dragging_) {
         handleEscape();
@@ -3796,7 +3848,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   }
   if (event->button() == Qt::MiddleButton) {
     if (phase_ == Phase::Edit && viewZoom_ > 1.0 &&
-        !textEditor_->isVisible()) {
+        !textEditing()) {
       panning_ = true;
       panAnchor_ = event->position();
       setCursor(Qt::ClosedHandCursor);
@@ -3808,13 +3860,13 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   cursor_ = event->position();
   endNudgeRun();
   if (const int tab = selectTabAt(cursor_); tab >= 0) {
-    if (phase_ == Phase::Edit && textEditor_->isVisible())
+    if (phase_ == Phase::Edit && textEditing())
       acceptText();
     activateSelectTab(selectTabItems().at(tab).kind);
     return;
   }
   if (phase_ == Phase::Edit && scrollPillRect().contains(cursor_)) {
-    if (textEditor_->isVisible())
+    if (textEditing())
       acceptText();
     const QRect region = selection_.toRect();
     returnToSelect(false);
@@ -3862,7 +3914,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
   }
 
   // Clicking away keeps whatever was typed; Enter belongs to multiline text.
-  if (textEditor_->isVisible())
+  if (textEditing())
     acceptText();
 
   for (const ToolbarButton &button : toolbarButtons()) {
@@ -4362,7 +4414,7 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
     QWidget::wheelEvent(event);
     return;
   }
-  if (textEditor_->isVisible()) {
+  if (textEditing()) {
     // The draft widget is laid out for the view it opened in; a zoom or pan
     // under it would leave the text adrift mid-edit. The view holds still
     // until the text commits.
@@ -4524,6 +4576,10 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
 }
 
 void CaptureEditor::updatePointerCursor() {
+  if (phase_ == Phase::Export) {
+    setCursor(Qt::WaitCursor);
+    return;
+  }
   if (phase_ == Phase::Select) {
     setCursor(windowMode_ || selectTabAt(cursor_) >= 0 ||
                       (recentsOpen_ && recentAt(cursor_) >= 0)
@@ -4603,32 +4659,36 @@ void CaptureEditor::refreshBackdropCache() {
   const QSize deviceSize = (QSizeF(size()) * ratio).toSize();
   const qint64 sourceKey = capture_.source.cacheKey();
   if (deviceSize.isEmpty()) {
-    backdrop_ = {};
     dimmedBackdrop_ = {};
     backdropSize_ = {};
     return;
   }
-  if (!backdrop_.isNull() && backdropSize_ == deviceSize &&
+  if (!dimmedBackdrop_.isNull() && backdropSize_ == deviceSize &&
       backdropKey_ == sourceKey && qFuzzyCompare(backdropRatio_, ratio))
     return;
 
+  StartupTimingScope timing("rebuild dimmed backdrop cache");
   backdropSize_ = deviceSize;
   backdropRatio_ = ratio;
   backdropKey_ = sourceKey;
-  backdrop_ = QPixmap(deviceSize);
-  backdrop_.setDevicePixelRatio(ratio);
-  backdrop_.fill(Qt::transparent);
-  {
-    QPainter cache(&backdrop_);
-    cache.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    cache.drawImage(QRectF(QPointF(), QSizeF(deviceSize) / ratio),
-                    capture_.source);
-  }
-  dimmedBackdrop_ = backdrop_.copy();
+  dimmedBackdrop_ = QPixmap(deviceSize);
+  dimmedBackdrop_.setDevicePixelRatio(ratio);
   {
     QPainter cache(&dimmedBackdrop_);
-    cache.fillRect(QRectF(QPointF(), QSizeF(deviceSize) / ratio),
-                   QColor(0, 0, 0, kBackdropDim));
+    cache.setRenderHint(QPainter::SmoothPixmapTransform,
+                        deviceSize != capture_.source.size());
+    cache.setCompositionMode(QPainter::CompositionMode_Source);
+    {
+      StartupTimingScope drawTiming("draw source into backdrop cache");
+      cache.drawImage(QRectF(QPointF(), QSizeF(deviceSize) / ratio),
+                      capture_.source);
+    }
+    cache.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    {
+      StartupTimingScope dimTiming("dim backdrop cache");
+      cache.fillRect(QRectF(QPointF(), QSizeF(deviceSize) / ratio),
+                     QColor(0, 0, 0, kBackdropDim));
+    }
   }
 }
 
@@ -4706,7 +4766,7 @@ void CaptureEditor::commitRegion(const QRectF &region,
     return;
   }
   editedKind_ = SelectTab::Region;
-  enterEdit(editStatus);
+  enterSelectedCapture(editStatus);
 }
 
 void CaptureEditor::startScrollCapture(const QRect &region) {
@@ -4783,7 +4843,7 @@ void CaptureEditor::adoptImage(QImage image, OperationLog log, SelectTab kind,
   // it again.
   if (scrollPanel_)
     endScrollCapture();
-  if (textEditor_->isVisible()) {
+  if (textEditing()) {
     textEditor_->clear();
     textEditor_->hide();
     textCaretTimer_.stop();
@@ -4818,11 +4878,11 @@ void CaptureEditor::adoptImage(QImage image, OperationLog log, SelectTab kind,
   // A fresh working document: the old snapshot belonged to the screen.
   snapshotPath_.clear();
   sourceWritten_ = false;
-  enterEdit(status);
+  enterSelectedCapture(status);
 }
 
 void CaptureEditor::returnToSelect(bool windowMode) {
-  if (textEditor_->isVisible()) {
+  if (textEditing()) {
     textEditor_->clear();
     textEditor_->hide();
     textCaretTimer_.stop();
@@ -4863,7 +4923,7 @@ void CaptureEditor::returnToSelect(bool windowMode) {
   scheduleSnapshot();
   setStatus(windowMode_
                 ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                 "Enter · Space returns to area")
+                                 "Enter · Space selects a scrolling region")
                 : QStringLiteral(
                       "Drag to select an area · Space selects a window"));
   updatePointerCursor();
@@ -4901,7 +4961,7 @@ void CaptureEditor::setWindowMode(bool enabled) {
   hoveredWindow_ = windowMode_ ? windowAt(cursor_) : -1;
   setStatus(windowMode_
                 ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                 "Enter · Space returns to area")
+                                 "Enter · Space selects a scrolling region")
                 : QStringLiteral(
                       "Drag to select an area · Space selects a window"));
   updatePointerCursor();
@@ -5171,7 +5231,7 @@ void CaptureEditor::selectFullscreen() {
   hoveredWindow_ = -1;
   selection_ = QRectF(QPointF(), capture_.previewSize);
   editedKind_ = SelectTab::Fullscreen;
-  enterEdit(QStringLiteral(
+  enterSelectedCapture(QStringLiteral(
       "Full screen selected · native resolution · outer handles crop"));
   update();
 }
@@ -5191,26 +5251,36 @@ void CaptureEditor::paintSelect(QPainter &painter) {
     return;
   }
   refreshBackdropCache();
-  painter.drawPixmap(rect(), dimmedBackdrop_);
+  {
+    StartupTimingScope timing("blit cached backdrop to overlay");
+    painter.drawPixmap(rect(), dimmedBackdrop_);
+  }
+  const bool exporting = phase_ == Phase::Export;
   // Drawn first, low-opacity, no card: the live/frozen screen, the tabs, the
   // selection all paint over it wherever they overlap.
-  drawHotkeyLegend(painter, rect(),
-                   {{QStringLiteral("Drag"), QStringLiteral("Area")},
-                    {QStringLiteral("Space"), QStringLiteral("Window")},
-                    {QStringLiteral("Ctrl+A"), QStringLiteral("Fullscreen")},
-                    {QStringLiteral("R"), QStringLiteral("Last region")},
-                    {QStringLiteral("S"), QStringLiteral("Scrolling region")},
-                    {QStringLiteral("Esc"), QStringLiteral("Close")}});
+  if (!exporting)
+    drawHotkeyLegend(painter, rect(),
+                     {{QStringLiteral("Drag"), QStringLiteral("Area")},
+                      {QStringLiteral("Space"), QStringLiteral("Window")},
+                      {QStringLiteral("Ctrl+A"), QStringLiteral("Fullscreen")},
+                      {QStringLiteral("R"), QStringLiteral("Last region")},
+                      {QStringLiteral("S"), QStringLiteral("Scrolling region")},
+                      {QStringLiteral("Esc"), QStringLiteral("Close")}});
 
   const bool haveHole =
-      windowMode_ ? hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()
-                  : !selection_.isEmpty();
+      exporting ? !selection_.isEmpty()
+      : windowMode_ ? hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()
+                    : !selection_.isEmpty();
   if (haveHole) {
+    const bool previewCoordinates =
+        windowMode_ || (exporting && editedKind_ != SelectTab::Region);
     const QRectF previewHole =
         windowMode_ ? QRectF(capture_.windows.at(hoveredWindow_).rect)
-                    : mapWidgetToPreview(selection_);
-    const QRectF destHole =
-        windowMode_ ? mapPreviewToWidget(previewHole) : selection_;
+        : previewCoordinates ? selection_
+                             : mapWidgetToPreview(selection_);
+    const QRectF destHole = previewCoordinates
+                                ? mapPreviewToWidget(previewHole)
+                                : selection_;
     painter.save();
     painter.setClipRect(destHole, Qt::IntersectClip);
     painter.drawImage(destHole, capture_.source, sourceRect(previewHole));
@@ -5226,21 +5296,26 @@ void CaptureEditor::paintSelect(QPainter &painter) {
       painter.drawRect(mapPreviewToWidget(QRectF(window.rect)));
     }
   } else if (!selection_.isEmpty()) {
+    const QRectF outline = exporting && editedKind_ != SelectTab::Region
+                               ? mapPreviewToWidget(selection_)
+                               : selection_;
     painter.setPen(QPen(Qt::white, 2));
     painter.setBrush(Qt::NoBrush);
-    painter.drawRect(selection_);
+    painter.drawRect(outline);
   }
 
-  if (!windowMode_ && !dragging_ && !recentsOpen_) {
+  if (!exporting && !windowMode_ && !dragging_ && !recentsOpen_) {
     painter.setPen(QPen(QColor(255, 255, 255, 56), 1));
     painter.drawLine(QPointF(cursor_.x(), 0), QPointF(cursor_.x(), height()));
     painter.drawLine(QPointF(0, cursor_.y()), QPointF(width(), cursor_.y()));
   }
-  paintRecents(painter);
-
-  paintSelectTabs(painter);
+  if (!exporting) {
+    paintRecents(painter);
+    paintSelectTabs(painter);
+  }
   drawStatusPill(painter, rect(), status_);
-  drawMeasureBadge(painter, rect(), cursor_, measurementText());
+  if (!exporting)
+    drawMeasureBadge(painter, rect(), cursor_, measurementText());
 }
 
 qreal selectionBoundsRadius(const Annotation &annotation, qreal inset) {
@@ -5614,7 +5689,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
                      QPointF(hue.right() + 2, hueY));
   }
 
-  if (textEditor_->isVisible()) {
+  if (textEditing()) {
     // Cream pill under the transparent inline editor, and
     // a caret spanning the glyph box rather than Neucha's whole line height.
     const QRectF box = textEditor_->geometry();
@@ -5777,14 +5852,29 @@ void CaptureEditor::paintEdit(QPainter &painter) {
 
 void CaptureEditor::paintEvent(QPaintEvent *event) {
   Q_UNUSED(event)
+  const bool firstPaint = !firstPaintReported_;
+  if (firstPaint)
+    startupTimingMark("first overlay paint started");
   if (scrollPanel_)
     return; // the panel owns the surface; the page shows through its hole
   QPainter painter(this);
   painter.setRenderHints(QPainter::Antialiasing |
                          QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);
-  if (phase_ == Phase::Select)
+  switch (phase_) {
+  case Phase::Select:
+  case Phase::Export:
     paintSelect(painter);
-  else
+    break;
+  case Phase::Edit:
     paintEdit(painter);
+    break;
+  }
+  if (firstPaint) {
+    firstPaintReported_ = true;
+    startupTimingMark("first overlay paint completed");
+    QTimer::singleShot(0, this, [] {
+      startupTimingMark("event loop resumed after first paint");
+    });
+  }
 }
