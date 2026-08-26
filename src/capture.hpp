@@ -43,7 +43,16 @@ struct CaptureData {
   QVector<WindowTarget> windows;
 };
 
-enum class BackgroundStyle { None, Off, Slate, Aurora, Sunset, Lagoon, Violet };
+enum class BackgroundStyle {
+  None,
+  Off,
+  Slate,
+  Aurora,
+  Sunset,
+  Lagoon,
+  Violet,
+  Custom
+};
 enum class CanvasBoundaryMode { Framed, Overflow, Image };
 enum class QuickOutputMode { None, Copy, Save, Both };
 
@@ -217,13 +226,25 @@ void describeFileCapture(CaptureData &capture, QImage image,
 /** Returns an upright image for captured Wayland buffer contents. */
 [[nodiscard]] QImage normalizeWaylandCapture(const QImage &image,
                                              std::uint32_t transform);
+/** `customBackdrop` is the image drawn for `BackgroundStyle::Custom`; unused
+ *  (and safe to omit) for every other style. */
 [[nodiscard]] QImage renderCapture(const CaptureData &capture,
                                    const QRectF &selection,
                                    const QVector<Annotation> &annotations,
                                    BackgroundStyle backgroundStyle,
                                    bool imageShadow = true,
                                    CanvasBoundaryMode boundaryMode =
-                                       CanvasBoundaryMode::Framed);
+                                       CanvasBoundaryMode::Framed,
+                                   const QImage &customBackdrop = {});
+/** Lowercase serialization name ("aurora", "custom", ...) for a backdrop
+ *  style, used in the operation log and the `[background] default` config
+ *  key. */
+[[nodiscard]] QString backgroundStyleName(BackgroundStyle style);
+/** Parses a backdrop style from its lowercase config/JSON name ("aurora",
+ *  "custom", ...). Leaves `style` untouched and returns false when `name`
+ *  doesn't match one. */
+[[nodiscard]] bool backgroundStyleFromName(const QString &name,
+                                           BackgroundStyle &style);
 /** Loads the current Wayland clipboard image. */
 [[nodiscard]] bool loadClipboardImage(QImage &image, QString &error);
 [[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);
@@ -244,8 +265,12 @@ void paintSpotlights(QPainter &painter, const QImage &source,
 void paintDefaultLayer(QPainter &painter, const QImage &redacted,
                        const QRectF &logicalBounds,
                        const QVector<Annotation> &annotations);
+/** `customBackdrop` is the image drawn (cover-fit) for
+ *  `BackgroundStyle::Custom`; a null image there paints nothing, same as
+ *  `BackgroundStyle::None`. */
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
-                            BackgroundStyle backgroundStyle);
+                            BackgroundStyle backgroundStyle,
+                            const QImage &customBackdrop = {});
 /** Paints the app's soft ambient-plus-key shadow around `imageRect`. */
 void paintCaptureImageShadow(QPainter &painter, const QRectF &imageRect,
                              qreal scaleX = 1.0, qreal scaleY = 1.0);
