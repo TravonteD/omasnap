@@ -96,7 +96,7 @@ KeybindConfig defaultKeybindConfig() {
   // inject modifiers in a way the compositor never publishes as xkb state.
   put(KeyAction::ZoomIn, {"+", "=", "Ctrl+="});
   put(KeyAction::ZoomOut, {"-", "_", "Ctrl+-"});
-  put(KeyAction::ZoomFit, {"0"});
+  put(KeyAction::ZoomFit, {"0", "Ctrl+0"});
   return config;
 }
 

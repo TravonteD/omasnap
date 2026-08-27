@@ -7378,6 +7378,14 @@ int main(int argc, char **argv) {
   if (!heldLockPath.isEmpty())
     return runInstanceLockHolder(heldLockPath);
 
+  // Keep the editor's keybind/palette/background config hermetic: read defaults
+  // from a scratch config dir instead of the developer's own ~/.config, so a
+  // personal [keys] override cannot flip the bindings the suite asserts on.
+  QTemporaryDir smokeConfig;
+  if (!smokeConfig.isValid())
+    return 19;
+  qputenv("XDG_CONFIG_HOME", smokeConfig.path().toUtf8());
+
   QApplication application(argc, argv);
   if (!loadCaptureFonts())
     return 17;

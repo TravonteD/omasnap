@@ -1230,11 +1230,13 @@ QString CaptureEditor::highlighterTooltip() const {
   if (highlighterMode_ == HighlighterMode::Snap) {
     return QStringLiteral("Highlighter · Snap · text height automatic · wheel "
                           "sets off-text size %1 · %2 / click again: Normal")
-        .arg(qRound(annotationSize_), keyHint(KeyAction::Highlighter));
+        .arg(qRound(annotationSize_))
+        .arg(keyHint(KeyAction::Highlighter));
   }
   return QStringLiteral("Highlighter · Normal · freehand · size %1 · wheel / "
                         "Alt+wheel · %2 / click again: Snap")
-      .arg(qRound(annotationSize_), keyHint(KeyAction::Highlighter));
+      .arg(qRound(annotationSize_))
+      .arg(keyHint(KeyAction::Highlighter));
 }
 
 void CaptureEditor::activateHighlighter() {
@@ -3578,7 +3580,7 @@ void CaptureEditor::handleToolbar(const QString &action) {
     customColorPickerOpen_ = !customColorPickerOpen_;
   } else if (action == QStringLiteral("ocr"))
     runOcr();
-  } else if (action == QStringLiteral("background"))
+  else if (action == QStringLiteral("background"))
     cycleBackground();
   else if (action == QStringLiteral("undo")) {
     undoEdit();
